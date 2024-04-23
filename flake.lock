@@ -1,0 +1,220 @@
+{
+  "nodes": {
+    "contracts": {
+      "inputs": {
+        "forge-std": "forge-std",
+        "foundry": "foundry",
+        "nixpkgs": "nixpkgs",
+        "permit2": "permit2",
+        "solady": "solady",
+        "utils": "utils"
+      },
+      "locked": {
+        "lastModified": 1712047431,
+        "narHash": "sha256-ZtwlB8m3iS3pvblaOIPDahm9cU53nxPABwXaNhAaV9Y=",
+        "owner": "masslbs",
+        "repo": "contracts",
+        "rev": "dfca5599fdf0e533fb6aebeceb379122332fe8a3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "masslbs",
+        "repo": "contracts",
+        "type": "github"
+      }
+    },
+    "flake-utils": {
+      "locked": {
+        "lastModified": 1644229661,
+        "narHash": "sha256-1YdnJAsNy69bpcjuoKdOYQX0YxZBiCYZo4Twxerqv7k=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "3cecb5b042f7f209c56ffd8371b2711a290ec797",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "flake-utils_2": {
+      "inputs": {
+        "systems": "systems_2"
+      },
+      "locked": {
+        "lastModified": 1710146030,
+        "narHash": "sha256-SZ5L6eA7HJ/nmkzGG7/ISclqe6oZdOZTNoesiInkXPQ=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "b1d9ab70662946ef0850d488da1c9019f3a9752a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "forge-std": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1709159040,
+        "narHash": "sha256-+yYlgUdjovn5BeaOYv3oVfRlpxQq/a/V4W2GPNzVdXc=",
+        "ref": "refs/heads/master",
+        "rev": "2f6762e4f73f3d835457c220b5f62dfeeb6f6341",
+        "revCount": 314,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/foundry-rs/forge-std"
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/foundry-rs/forge-std"
+      }
+    },
+    "foundry": {
+      "inputs": {
+        "flake-utils": "flake-utils",
+        "nixpkgs": [
+          "contracts",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1709457044,
+        "narHash": "sha256-1SktmSjTjC1rhJwQ+kvqUeExKogNzserFGuoGwOerHw=",
+        "ref": "monthly",
+        "rev": "592e8ca2e82a2c3a8d0d4dcc7f7c5b8c3842efcd",
+        "revCount": 432,
+        "type": "git",
+        "url": "https://github.com/shazow/foundry.nix.git"
+      },
+      "original": {
+        "ref": "monthly",
+        "type": "git",
+        "url": "https://github.com/shazow/foundry.nix.git"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1709309926,
+        "narHash": "sha256-VZFBtXGVD9LWTecGi6eXrE0hJ/mVB3zGUlHImUs2Qak=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "79baff8812a0d68e24a836df0a364c678089e2c7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-23.11",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1713805509,
+        "narHash": "sha256-YgSEan4CcrjivCNO5ZNzhg7/8ViLkZ4CB/GrGBVSudo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1e1dc66fe68972a76679644a5577828b6a7e8be4",
+        "type": "github"
+      },
+      "original": {
+        "id": "nixpkgs",
+        "type": "indirect"
+      }
+    },
+    "permit2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1696001773,
+        "narHash": "sha256-sevmJhYn5/odTvS9si+KFw/R234KNaNfrnECdkVcL9w=",
+        "ref": "refs/heads/main",
+        "rev": "cc56ad0f3439c502c246fc5cfcc3db92bb8b7219",
+        "revCount": 184,
+        "type": "git",
+        "url": "https://github.com/uniswap/permit2.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://github.com/uniswap/permit2.git"
+      }
+    },
+    "root": {
+      "inputs": {
+        "contracts": "contracts",
+        "flake-utils": "flake-utils_2",
+        "nixpkgs": "nixpkgs_2"
+      }
+    },
+    "solady": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1709528765,
+        "narHash": "sha256-gDuPzZhIgOd4m/Ucm0TVOvxwbHrQlKd1dnKoqjqvSKc=",
+        "owner": "Vectorized",
+        "repo": "solady",
+        "rev": "c4c96607cb3aa3807b14c81ae2015bcba061f8fc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Vectorized",
+        "repo": "solady",
+        "type": "github"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_2": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "utils": {
+      "inputs": {
+        "systems": "systems"
+      },
+      "locked": {
+        "lastModified": 1709126324,
+        "narHash": "sha256-q6EQdSeUZOG26WelxqkmR7kArjgWCdw5sfJVHPH/7j8=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "d465f4819400de7c8d874d50b982301f28a84605",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

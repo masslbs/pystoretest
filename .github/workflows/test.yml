@@ -1,0 +1,26 @@
+name: test
+on: [push]
+jobs:
+  pystoretest-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pystoretest
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: DeterminateSystems/flake-checker-action@main
+
+      - uses: actions/checkout@v4
+        with:
+          repository: masslbs/network-schema
+          ssh-key: ${{ secrets.SSH_CHECKOUT_NETWORK_SCHEMA }}
+          path: network-schema
+
+      - name: Client import check
+        run: nix develop -c python -c "from client import RelayClient"
+        working-directory: pystoretest
