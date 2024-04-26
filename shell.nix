@@ -20,12 +20,13 @@
 
   massmarket_hash_event = pkgs.python3Packages.buildPythonPackage rec {
     pname = "massmarket_hash_event";
-    version = "0.0.12a2";
+    version = "2.0";
     src = pkgs.python3.pkgs.fetchPypi {
       inherit pname version;
-      hash = "sha256-T3gG94vljHLLqQqFtCOx5MwLUwlNeQsTymE2DYnmCLw=";
+      hash = "sha256-9qnF6TZd4KUM5J1Lo1rgeLvTRSI4GRCEoeFz/tnaqdI";
     };
-    #src = /home/cryptix/Mass/network-schema/python/dist/massmarket_hash_event-0.0.12a2.tar.gz;
+    # to test pre-releases run 'make build' in network-schema/python and update the path below
+    # src = /home/cryptix/Mass/network-schema/python/dist/massmarket_hash_event-${version}.tar.gz;
     format = "pyproject";
     buildInputs = [
       pkgs.python3Packages.setuptools
@@ -49,9 +50,10 @@
   contracts_abi = contracts.packages.${pkgs.system}.default;
 in
   pkgs.mkShell {
-    buildInputs = [mass-python];
+    buildInputs = [mass-python pkgs.pyright];
     shellHook = ''
       export $(egrep -v '^#' .env | xargs)
+      export PYTHON=${mass-python}/bin/python
       export MASS_CONTRACTS=${contracts_abi}
     '';
   }

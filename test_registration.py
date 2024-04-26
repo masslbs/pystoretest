@@ -2,8 +2,8 @@ import os
 
 from client import RelayClient
 
-def test_create_store_manifest(wc_auth: RelayClient):
-    wc_auth.create_store_manifest()
+def test_create_shop_manifest(wc_auth: RelayClient):
+    wc_auth.create_shop_manifest()
     assert wc_auth.errors == 0
     wc_auth.close()
 
@@ -15,8 +15,8 @@ def test_invite_another_user(wc_auth: RelayClient):
     assert owner.errors == 0
     # new_clerk has it's own private key
     bob_key = bytes.hex(os.urandom(32))
-    new_clerk = RelayClient(name="Bob", private_key=bob_key)
-    new_clerk.store_token_id = owner.store_token_id
+    new_clerk = RelayClient(name="Bob", wallet_private_key=bob_key)
+    new_clerk.shop_token_id = owner.shop_token_id
 
     # give clerk some eth so they can run transactions
     transaction = {
@@ -45,7 +45,7 @@ def test_invite_another_user(wc_auth: RelayClient):
     owner.handle_all()
     assert len(owner.all_key_cards) == 2
     assert new_clerk.all_key_cards == owner.all_key_cards
-    
+
     # done
     owner.close()
     new_clerk.close()
