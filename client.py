@@ -140,6 +140,8 @@ class RelayClient():
         self.storeReg = self.w3.eth.contract(address=addresses["StoreReg"], abi=storeRegABI)
         erc20TestingTokenABI = open(os.getenv("MASS_CONTRACTS")+"/abi/Eddies.json", "r").read()
         self.erc20Token = self.w3.eth.contract(address=addresses["Eddies"], abi=erc20TestingTokenABI)
+        paymentFactoryABI = open(os.getenv("MASS_CONTRACTS")+"/abi/PaymentFactory.json", "r").read()
+        self.paymentFactory =  self.w3.eth.contract(address=addresses["PaymentFactory"], abi=paymentFactoryABI)
 
 
     def check_tx(self, tx):
@@ -658,10 +660,11 @@ class RelayClient():
         evt = schema_pb2.Event(update_manifest=um)
         self._write_event(evt)
         # update store state
-        if field == schema_pb2.UpdateManifest.MANIFEST_FIELD_DOMAIN:
-            self.manifest.domain = string_value
-        elif field == schema_pb2.UpdateManifest.MANIFEST_FIELD_PUBLISHED_TAG:
-            self.manifest.published_tag_id = id_value
+        if not self.excpect_error:
+            if field == schema_pb2.UpdateManifest.MANIFEST_FIELD_DOMAIN:
+                self.manifest.domain = string_value
+            elif field == schema_pb2.UpdateManifest.MANIFEST_FIELD_PUBLISHED_TAG:
+                self.manifest.published_tag_id = id_value
 
     def create_item(self, name: str, price: str):
         decimal_price = decimal.Decimal(price)

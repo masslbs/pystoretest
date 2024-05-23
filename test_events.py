@@ -85,6 +85,34 @@ def test_write_and_sync_later(make_client):
     assert a2.manifest.domain == "merch.mass.market"
     assert a2.manifest.domain == a1.manifest.domain
 
+
+def test_manifest_first(make_client):
+    a1 = make_client("alice.1")
+    store_id = a1.register_store()
+    a1.enroll_key_card()
+    a1.login()
+    a1.handle_all()
+    assert a1.errors == 0
+
+    def reset():
+        assert a1.errors == 1
+        assert a1.last_error.code == "notFound"
+        a1.errors = 0
+        a1.last_error = None
+    a1.excpect_error = True
+
+    a1.update_store_manifest(field=schema_pb2.UpdateManifest.MANIFEST_FIELD_DOMAIN, string_value="early.mass.market")
+    reset()
+
+    a1.create_item('foo', '22')
+    reset()
+
+    a1.create_tag('tag')
+    reset()
+
+    a1.create_cart()
+    reset()
+
 def test_create_and_update_item(make_client):
     # both alices share the same private wallet but have different keycards
     a1 = make_client("alice.1")
@@ -141,7 +169,7 @@ def test_create_and_update_item(make_client):
     # reset error state
     a2.errors = 0
     a2.last_error = None
-    
+
     newLargeMetaItem = os.urandom(32)
     item = schema_pb2.CreateItem(event_id=newLargeMetaItem, metadata=largeMetadata, price=b'01.00')
     evt = schema_pb2.Event(create_item=item)
@@ -303,7 +331,7 @@ def test_invalid_tag_interactions(make_two_clients):
     a2.add_item_to_tag(tid, iid1)
     # multiple adds are not an error
     assert a2.errors == 0
-    
+
     # remove item from tag that is not in store
     a2.errors = 0
     a2.remove_from_tag(tid, noSuchItemId)

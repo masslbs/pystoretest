@@ -1,6 +1,7 @@
 import time
 import os
 
+from sha3 import keccak_256
 from massmarket_hash_event import schema_pb2
 
 
@@ -138,6 +139,14 @@ def test_carts_happy_eth(make_client):
     assert alice.stock[iid1] == 2
     assert alice.stock[iid2] == 3
 
+    # check we can do the sweep
+    reciept_hash = keccak_256()
+    reciept_hash.update(cid)
+    proof = "0x"+ "0"*40
+    erc20addr = proof
+    tx = alice.paymentFactory.functions.processPayment(alice.account.address, proof, total, erc20addr, reciept_hash.digest()).transact()
+    alice.check_tx(tx)
+
 def test_carts_invalid(make_two_clients, make_client):
     a1, a2 = make_two_clients
 
@@ -220,7 +229,7 @@ def test_carts_invalid(make_two_clients, make_client):
     a1.commit_cart(cid)
     assert a1.errors == 1
     assert a1.last_error.code == "invalid"
-    
+
     # reset error state
     a1.excpect_error = False
     a1.errors = 0
@@ -305,6 +314,14 @@ def test_carts_happy_erc20_checkout(make_client):
     assert cart.payed == True
     assert alice.stock[iid1] == 2
     assert alice.stock[iid2] == 2
+
+    # check we can do the sweep
+    reciept_hash = keccak_256()
+    reciept_hash.update(cid)
+    proof = "0x" + "0"*40
+    erc20addr = alice.erc20Token.address
+    tx = alice.paymentFactory.functions.processPayment(alice.account.address, proof, total, erc20addr, reciept_hash.digest()).transact()
+    alice.check_tx(tx)
 
 def test_carts_last_item(make_two_clients):
     alice, bob = make_two_clients
