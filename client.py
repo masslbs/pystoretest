@@ -660,10 +660,11 @@ class RelayClient():
         evt = schema_pb2.Event(update_manifest=um)
         self._write_event(evt)
         # update store state
-        if field == schema_pb2.UpdateManifest.MANIFEST_FIELD_DOMAIN:
-            self.manifest.domain = string_value
-        elif field == schema_pb2.UpdateManifest.MANIFEST_FIELD_PUBLISHED_TAG:
-            self.manifest.published_tag_id = id_value
+        if not self.excpect_error:
+            if field == schema_pb2.UpdateManifest.MANIFEST_FIELD_DOMAIN:
+                self.manifest.domain = string_value
+            elif field == schema_pb2.UpdateManifest.MANIFEST_FIELD_PUBLISHED_TAG:
+                self.manifest.published_tag_id = id_value
 
     def create_item(self, name: str, price: str):
         decimal_price = decimal.Decimal(price)
