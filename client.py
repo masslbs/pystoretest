@@ -140,6 +140,8 @@ class RelayClient():
         self.storeReg = self.w3.eth.contract(address=addresses["StoreReg"], abi=storeRegABI)
         erc20TestingTokenABI = open(os.getenv("MASS_CONTRACTS")+"/abi/Eddies.json", "r").read()
         self.erc20Token = self.w3.eth.contract(address=addresses["Eddies"], abi=erc20TestingTokenABI)
+        paymentFactoryABI = open(os.getenv("MASS_CONTRACTS")+"/abi/PaymentFactory.json", "r").read()
+        self.paymentFactory =  self.w3.eth.contract(address=addresses["PaymentFactory"], abi=paymentFactoryABI)
 
 
     def check_tx(self, tx):
