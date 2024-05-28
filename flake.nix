@@ -3,7 +3,7 @@
 
   inputs  = {
     flake-utils.url = "github:numtide/flake-utils";
-    contracts.url = "github:masslbs/contracts";
+    contracts.url = "github:masslbs/contracts/wanderer";
   };
 
   outputs = {
