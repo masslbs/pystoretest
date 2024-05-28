@@ -45,7 +45,7 @@
       massmarket_hash_event
     ];
   mass-python = pinnedPython.withPackages mass-python-packages;
-  contracts_abi = contracts.packages.${pkgs.system}.market-build;
+  contracts_abi = contracts.packages.${pkgs.system}.default;
 in
   pkgs.mkShell {
     buildInputs = [mass-python];
