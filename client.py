@@ -52,6 +52,8 @@ class Cart():
         self.purchase_address = None
         self.totals = None
         self.payed = False
+        self.payment_id = None
+        self.payment_ttl = None
 
 eip712spec = [
     {"name": "name", "type": "string"},
@@ -129,20 +131,22 @@ class RelayClient():
         self.tags = {}
         self.carts = {}
 
-
     def __load_contracts(self):
         addresses = json.loads(open(os.getenv("MASS_CONTRACTS")+"/deploymentAddresses.json", "r").read())
         print("using contracts:")
         pprint(addresses)
+
         relayRegABI = open(os.getenv("MASS_CONTRACTS")+"/abi/RelayReg.json", "r").read()
         self.relayReg = self.w3.eth.contract(address=addresses["RelayReg"], abi=relayRegABI)
+
         storeRegABI = open(os.getenv("MASS_CONTRACTS")+"/abi/StoreReg.json", "r").read()
         self.storeReg = self.w3.eth.contract(address=addresses["StoreReg"], abi=storeRegABI)
+
         erc20TestingTokenABI = open(os.getenv("MASS_CONTRACTS")+"/abi/Eddies.json", "r").read()
         self.erc20Token = self.w3.eth.contract(address=addresses["Eddies"], abi=erc20TestingTokenABI)
-        paymentFactoryABI = open(os.getenv("MASS_CONTRACTS")+"/abi/PaymentFactory.json", "r").read()
-        self.paymentFactory =  self.w3.eth.contract(address=addresses["PaymentFactory"], abi=paymentFactoryABI)
 
+        paymentsABI = open(os.getenv("MASS_CONTRACTS")+"/abi/PaymentsByAddress.json", "r").read()
+        self.payments =  self.w3.eth.contract(address=addresses["Payments"], abi=paymentsABI)
 
     def check_tx(self, tx):
         self.__check_transaction(tx)
@@ -169,7 +173,7 @@ class RelayClient():
         self.store_token_id = token_id
         print("storeTokenID: {}".format(self.store_token_id))
         # check admin access
-        tx = self.storeReg.functions.updateRootHash(self.store_token_id, os.urandom(32)).transact()
+        tx = self.storeReg.functions.updateRootHash(self.store_token_id, os.urandom(32), 1).transact()
         self.__check_transaction(tx)
         self.add_relay_to_store(self.relay_token_id)
         return token_id
@@ -301,7 +305,7 @@ class RelayClient():
         resp = schema_pb2.PingResponse(request_id=req.request_id)
         data = b"\x02" + resp.SerializeToString()
         self.connection.send(data)
-        print("{} sent a pong to request_id {}".format(self.name, req.request_id))
+        print(f"{self.name} sent a pong to request_id {req.request_id.hex()}")
         self.pongs += 1
 
     def handle_sync_status_request(self, req: schema_pb2.SyncStatusRequest):
@@ -483,6 +487,8 @@ class RelayClient():
                 cart.purchase_address = cf.purchase_addr
                 cart.totals = PriceTotals(cf.sub_total, cf.sales_tax, cf.total)
                 cart.total_in_crypto = int(cf.total_in_crypto)
+                cart.payment_id = int.from_bytes(cf.payment_id, byteorder="big")
+                cart.payment_ttl = int(cf.payment_ttl)
                 self.carts[cart_id] = cart
             elif which == "cart_abandoned":
                 ca = evt.cart_abandoned

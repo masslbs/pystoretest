@@ -20,11 +20,12 @@
 
   massmarket_hash_event = pkgs.python3Packages.buildPythonPackage rec {
     pname = "massmarket_hash_event";
-    version = "0.0.11";
+    version = "0.0.12a2";
     src = pkgs.python3.pkgs.fetchPypi {
       inherit pname version;
-      hash = "sha256-MIftyl5WN++ZzuBnZWDfA2XBwHE/eRRATp5sQoWN4cU=";
+      hash = "sha256-T3gG94vljHLLqQqFtCOx5MwLUwlNeQsTymE2DYnmCLw=";
     };
+    #src = /home/cryptix/Mass/network-schema/python/dist/massmarket_hash_event-0.0.12a2.tar.gz;
     format = "pyproject";
     buildInputs = [
       pkgs.python3Packages.setuptools
