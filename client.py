@@ -17,7 +17,7 @@ from web3 import Web3, Account, HTTPProvider
 from web3.middleware import construct_sign_and_send_raw_middleware
 from web3.exceptions import TransactionNotFound
 from eth_keys import keys
-from eth_account.messages import encode_defunct, encode_structured_data
+from eth_account.messages import encode_defunct, encode_typed_data
 
 # our protobuf schema
 from massmarket_hash_event import hash_event, error_pb2, transport_pb2, authentication_pb2, shop_pb2, shop_requests_pb2, shop_events_pb2
@@ -333,7 +333,7 @@ class RelayClient():
                 "keyCard": keyCardPK.public_key.to_hex()[2:],
             }
         }
-        encoded_data = encode_structured_data(typed_data)
+        encoded_data = encode_typed_data(full_message=typed_data)
         signed_message = self.account.sign_message(encoded_data)
         signature = signed_message.signature
 
