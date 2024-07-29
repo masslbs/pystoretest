@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from pprint import pprint
 from time import sleep
 import decimal
+import datetime
 
 # pip
 import google.protobuf.any_pb2 as anypb
@@ -17,7 +18,8 @@ from web3 import Web3, Account, HTTPProvider
 from web3.middleware import construct_sign_and_send_raw_middleware
 from web3.exceptions import TransactionNotFound
 from eth_keys import keys
-from eth_account.messages import encode_defunct, encode_typed_data
+from eth_account.messages import encode_defunct
+import siwe
 
 # our protobuf schema
 from massmarket_hash_event import hash_event, error_pb2, transport_pb2, authentication_pb2, shop_pb2, shop_requests_pb2, shop_events_pb2
@@ -27,6 +29,11 @@ class RelayException(Exception):
         super().__init__(err.message)
         self.message = err.message
         self.code = err.code
+
+class EnrollException(Exception):
+    def __init__(self, http_code, err: str):
+        super().__init__(err)
+        self.http_code = http_code
 
 def new_request_id():
     return os.urandom(16)
@@ -56,13 +63,6 @@ class Order():
         self.payment_id = None
         self.payment_ttl = None
 
-eip712spec = [
-    {"name": "name", "type": "string"},
-    {"name": "version", "type": "string"},
-    {"name": "chainId", "type": "uint256"},
-    {"name": "verifyingContract", "type": "address"},
-]
-
 class RelayClient():
 
     def __init__(self,
@@ -71,13 +71,15 @@ class RelayClient():
                  key_card_private_key=None,
                  guest=False,
                  relay_token_id=None,
-                 chain_id=None):
+                 chain_id=None,
+                 auto_connect=True):
         self.name = name
 
         self.relay_http_address = os.getenv("RELAY_HTTP_ADDRESS")
         assert self.relay_http_address is not None, "RELAY_HTTP_ADDRESS is not set"
         print(f"{name} is using relay: {self.relay_http_address}")
         relay_addr = urlparse(self.relay_http_address)
+        self.relay_addr = relay_addr
 
         self.relay_ping = float(os.getenv("RELAY_PING"))
 
@@ -91,10 +93,12 @@ class RelayClient():
             raise Exception("Unknown Relay HTTP scheme: {}".format(relay_addr.scheme))
 
         # connection setup
-        self.relay_ws_endpoint_url = relay_ws_endpoint.geturl()
-        self.connection = connect(self.relay_ws_endpoint_url, origin="localhost", close_timeout=0.5)
-        self.connected = True
-        print(f"{name} has ws endpoint: {self.relay_ws_endpoint_url}")
+        if auto_connect:
+            self.relay_ws_endpoint_url = relay_ws_endpoint.geturl()
+            self.connection = connect(self.relay_ws_endpoint_url, origin="localhost", close_timeout=0.5)
+            self.connected = True
+            print(f"{name} has ws endpoint: {self.relay_ws_endpoint_url}")
+
         self.logged_in = False
         self.pongs = 0
         self.outgoingRequests = {}
@@ -118,7 +122,6 @@ class RelayClient():
             self.relay_token_id = relay_token_id
             assert chain_id is not None, "need to set both relay_token_id and chain_id"
             self.chain_id = chain_id
-
 
         # etherum setup
         self.w3 = Web3(HTTPProvider(os.getenv("ETH_RPC_URL")))
@@ -276,7 +279,7 @@ class RelayClient():
         tx = self.shopReg.functions.mint(token_id, self.account.address).transact()
         self.__check_transaction(tx)
         self.shop_token_id = token_id
-        print("shopTokenID: {}".format(self.shop_token_id))
+        print(f"shopTokenID: {self.shop_token_id}")
         # check admin access
         tx = self.shopReg.functions.updateRootHash(self.shop_token_id, os.urandom(32), 1).transact()
         self.__check_transaction(tx)
@@ -303,7 +306,7 @@ class RelayClient():
 
     def redeem_invite(self, token):
         acc = Account.from_key(token)
-        msg_text = "enrolling:{}".format(self.account.address)
+        msg_text = f"enrolling:{self.account.address}"
         msg = encode_defunct(text=msg_text.lower())
         sig = acc.sign_message(msg)
         rhex = to_32byte_hex(sig.r)
@@ -313,51 +316,54 @@ class RelayClient():
                                                   self.account.address).transact()
         self.__check_transaction(tx)
 
-    def enroll_key_card(self):
-        keyCardPK = keys.PrivateKey(self.own_key_card.key)
-        typed_data = {
-            "types": {
-                "EIP712Domain": eip712spec,
-                "Enrollment": [
-                    {"name": "keyCard", "type": "string"},
-                ],
-            },
-            "primaryType": "Enrollment",
-            "domain": {
-                "name": "MassMarket",
-                "version": "1",
-                "chainId": 0,
-                "verifyingContract": "0x0000000000000000000000000000000000000000",
-            },
-            "message": {
-                "keyCard": keyCardPK.public_key.to_hex()[2:],
-            }
-        }
-        encoded_data = encode_typed_data(full_message=typed_data)
-        signed_message = self.account.sign_message(encoded_data)
-        signature = signed_message.signature
+    def enroll_key_card(self, siwe_msg=None):
+        keyCard = keys.PrivateKey(self.own_key_card.key)
 
-        json_data = json.dumps({
-            "key_card": base64.b64encode(keyCardPK.public_key.to_bytes()).decode('utf-8'),
-            "signature": base64.b64encode(signature).decode('utf-8'),
-            "shop_token_id": base64.b64encode(self.shop_token_id.to_bytes(32, 'big')).decode('utf-8'),
-        })
-
-        # change path to register shop
-        modified_url = urlparse(self.relay_http_address)._replace(path="/v2/enroll_key_card")
+        modified_url = self.relay_addr._replace(path="/v2/enroll_key_card")
         if self.isGuest:
             modified_url = modified_url._replace(query="guest=1")
         enroll_url = modified_url.geturl()
 
+        if self.shop_token_id is None:
+            raise Exception("shop_token_id unset")
+
+        if siwe_msg is None:
+            kc_hex = keyCard.public_key.to_hex()
+
+            now = datetime.datetime.utcnow().isoformat() + 'Z'
+            siwe_msg = siwe.SiweMessage(
+                domain=self.relay_addr.netloc,
+                address=self.account.address,
+                uri=enroll_url,
+                version='1',
+                chain_id=self.chain_id,
+                nonce="00000000", # keyCards can only be enrolled once
+                issued_at=now,
+                statement=f"keyCard: {kc_hex}",
+                resources=[
+                    f"mass-relayid:{self.relay_token_id}",
+                    f"mass-shopid:{self.shop_token_id}",
+                    f"mass-keycard:{kc_hex}",
+                ])
+
+        data = siwe_msg.prepare_message()
+        encoded_data = encode_defunct(text=data)
+        signed_message = self.account.sign_message(encoded_data)
+        signature = signed_message.signature
+
+        json_data = json.dumps({
+            "signature": base64.b64encode(signature).decode('utf-8'),
+            "message": data,
+        })
+
         response = requests.post(enroll_url, data=json_data, headers={'Origin': 'localhost'})
-        if response.status_code != 201:
-            raise Exception(f"unexpected response http code: {response.status_code}")
+
         respData = response.json()
-        if "error" in respData:
-            raise Exception(respData["error"])
+        if response.status_code != 201 or "error" in respData:
+                raise EnrollException(response.status_code, respData["error"])
         assert respData["success"] == True
-        print(f"{self.name} enrolled keyCard {keyCardPK.public_key.to_hex()}")
-        self.all_key_cards[keyCardPK.public_key.to_bytes()] = self.account.address
+        print(f"{self.name} enrolled keyCard {keyCard.public_key.to_hex()}")
+        self.all_key_cards[keyCard.public_key.to_bytes()] = self.account.address
 
     def close(self):
         self.connection.close()
@@ -630,7 +636,6 @@ class RelayClient():
             self.connection = connect(self.relay_ws_endpoint_url, origin="localhost", close_timeout=0.5)
             self.connected = True
         kc = keys.PrivateKey(self.own_key_card.key)
-        # print('public key: ' + kc.public_key.to_hex())
         req_id = new_request_id()
         ar = authentication_pb2.AuthenticateRequest(request_id=req_id, public_key=kc.public_key.to_bytes())
         data = b"\x14" + ar.SerializeToString()
