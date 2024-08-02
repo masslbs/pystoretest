@@ -1,54 +1,76 @@
 import os
-import json
-import requests
-from massmarket_hash_event import shop_pb2, shop_events_pb2, error_pb2
-from client import RelayClient
+import pytest
+import time
+from typing import Tuple
 
-def test_clerk_blob_upload(wc_auth: RelayClient):
+import google.protobuf.any_pb2 as anypb
+
+from massmarket_hash_event import (
+    base_types_pb2 as mtypes,
+    shop_events_pb2 as mevents,
+    error_pb2,
+    subscription_pb2,
+    transport_pb2,
+    envelope_pb2,
+)
+from client import RelayClient, RelayException, new_object_id, vid, now_pbts
+
+
+def test_helper_vid():
+    assert vid(23) == "23:"
+    assert vid(23, None) == "23:"
+    assert vid(1, [2]) == "1:2:"
+    assert vid(1, [2, 3]) == "1:2:3:"
+    assert vid(1, [3, 2]) == "1:2:3:"
+
+
+def test_event_nonce_collision(wc_auth: RelayClient):
     wc_auth.create_shop_manifest()
     assert wc_auth.errors == 0
-    req_id = wc_auth.get_blob_upload_url()
-    wc_auth.handle_all()
-    while "waiting" in wc_auth.outgoingRequests[req_id]:
-        print("waiting")
-        wc_auth.handle_all()
-        assert wc_auth.errors == 0
-    urlResp = wc_auth.outgoingRequests[req_id]
-    files = {'file': ('filename.txt', open('testcat.jpg', 'rb'), 'application/octet-stream')}
-    uploadResp = requests.post(urlResp["url"], files=files)
-    assert uploadResp.status_code == 201
-    uploadJson = uploadResp.json()
-    assert uploadJson["ipfs_path"] == "/ipfs/Qma8tx56NLeSi2we2R41C8haSNj9kyRooxrJptyLvncbWf"
+
+    t = mevents.Tag(id=new_object_id(), name="nonce fail")
+
+    shop_evt = mevents.ShopEvent(
+        nonce=0,  # used by manifest already
+        shop_id=mtypes.Uint256(raw=wc_auth.shop_token_id.to_bytes(32, "big")),
+        timestamp=now_pbts(),
+        tag=t,
+    )
+
+    # need to copy a bit of code from _create_event
+    msg = wc_auth._sign_event(shop_evt)
+    wrapped = anypb.Any()
+    wrapped.Pack(shop_evt)
+    sig_evt = transport_pb2.SignedEvent(
+        event=wrapped,
+        signature=mtypes.Signature(raw=msg.signature),
+    )
+    with pytest.raises(RelayException):
+        wc_auth._send_event(sig_evt)
     wc_auth.close()
+
 
 def test_clerk_update_shop_manifest(wc_auth: RelayClient):
     wc_auth.create_shop_manifest()
     assert wc_auth.errors == 0
-    wc_auth.update_shop_manifest(name="Good Stuff", description="Only the best...", profile="http://cataas.com/cat")
-    assert wc_auth.errors == 0
-    wc_auth.update_shop_manifest(domain="merch.mass.market")
-    assert wc_auth.errors == 0
-    new_pub_tag = os.urandom(32)
-    wc_auth.create_tag('published 2', tag_id=new_pub_tag)
-    wc_auth.update_shop_manifest(published_tag_id=new_pub_tag)
-    assert wc_auth.errors == 0
     erc20_addr = wc_auth.w3.to_bytes(hexstr=wc_auth.erc20Token.address[2:])
-    curr = [shop_pb2.ShopCurrency(token_addr=erc20_addr, chain_id=wc_auth.chain_id)]
+    erc20_addr_pb = mtypes.EthereumAddress(raw=erc20_addr)
+    curr = [mtypes.ShopCurrency(address=erc20_addr_pb, chain_id=wc_auth.chain_id)]
     wc_auth.update_shop_manifest(add_currencies=curr)
     assert wc_auth.errors == 0
     wc_auth.update_shop_manifest(remove_currencies=curr)
     assert wc_auth.errors == 0
-    p = shop_events_pb2.UpdateShopManifest.Payee(
-        name= "rando",
-        addr = os.urandom(20),
+    p = mtypes.Payee(
+        name="rando",
+        address=mtypes.EthereumAddress(raw=os.urandom(20)),
         chain_id=wc_auth.chain_id,
         call_as_contract=True,
     )
     wc_auth.update_shop_manifest(add_payee=p)
     assert wc_auth.errors == 0
     wc_auth.expect_error = True
-    rand_curr = shop_pb2.ShopCurrency(
-        token_addr = os.urandom(20),
+    rand_curr = mtypes.ShopCurrency(
+        address=mtypes.EthereumAddress(raw=os.urandom(20)),
         chain_id=wc_auth.chain_id,
     )
     wc_auth.update_shop_manifest(add_currencies=[rand_curr])
@@ -56,21 +78,26 @@ def test_clerk_update_shop_manifest(wc_auth: RelayClient):
     wc_auth.expect_error = False
     wc_auth.close()
 
+
 def test_clerk_sync_shop_manifest(make_two_clients):
     a1, a2 = make_two_clients
 
     # a1 writes events
-    new_domain = "merch.mass.market"
-    a1.update_shop_manifest(domain=new_domain)
+    new_payee = mtypes.Payee(
+        name="extras",
+        address=mtypes.EthereumAddress(raw=os.urandom(20)),
+        chain_id=a1.chain_id,
+        call_as_contract=True,
+    )
+    a1.update_shop_manifest(add_payee=new_payee)
     a1.handle_all()
     assert a1.errors == 0
 
     # a2 syncs the event
     a2.handle_all()
     assert a2.errors == 0
-    assert a2.manifest.domain == new_domain
-    assert a2.manifest.domain == a1.manifest.domain
-    # TODO: only one shop manifest
+    assert len(a2.payees) == 2
+
 
 def test_clerk_write_and_sync_later(make_client):
     # both alices share the same private wallet but have different keycards
@@ -83,22 +110,25 @@ def test_clerk_write_and_sync_later(make_client):
 
     # a1 writes an a few events
     a1.create_shop_manifest()
-    a1.update_shop_manifest(domain="merch.mass.market")
-    assert a1.errors == 0
-    a1.create_item('shoes', '1000')
+    a1.create_listing("shoes", "1000")
     assert a1.errors == 0
 
     print("connecting alice.2")
 
     # a2 connects after a1 has written events
     a2 = make_client("alice.2")
+    a2.account = a1.account
     a2.shop_token_id = shop_id
     a2.enroll_key_card()
     a2.login()
     assert a2.errors == 0
-    assert len(a2.items) == 1
-    assert a2.manifest.domain == "merch.mass.market"
-    assert a2.manifest.domain == a1.manifest.domain
+    retries = 10
+    while len(a2.listings) < 1 and retries > 0:
+        time.sleep(1)
+        a2.handle_all()
+        retries -= 1
+    assert len(a2.listings) == 1
+
 
 def test_clerk_manifest_first(make_client):
     a1 = make_client("alice.1")
@@ -113,22 +143,110 @@ def test_clerk_manifest_first(make_client):
         assert a1.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
         a1.errors = 0
         a1.last_error = None
+
     a1.expect_error = True
 
-    a1.update_shop_manifest(domain="early.mass.market")
+    rand_curr = mtypes.ShopCurrency(
+        address=mtypes.EthereumAddress(raw=os.urandom(20)),
+        chain_id=a1.chain_id,
+    )
+    a1.update_shop_manifest(add_currencies=[rand_curr])
     reset()
 
-    a1.create_item('foo', '22')
+    a1.create_listing("foo", "22")
     reset()
 
-    a1.create_tag('tag')
+    a1.create_tag("tag")
     reset()
 
     a1.create_order()
     reset()
 
-def test_clerk_create_and_update_item(make_client):
-    # both alices share the same private wallet but have different keycards
+
+def test_account_message_mirror(make_client):
+    a1 = make_client("alice.1")
+    shop_id = a1.register_shop()
+    a1.enroll_key_card()
+    a1.login()
+    a1.handle_all()
+    assert a1.errors == 0
+
+    time.sleep(1)
+    a1.handle_all()
+
+    tx = a1.shopReg.functions.registerUser(
+        a1.shop_token_id,
+        "0x" + "42" * 20,
+        0x1FF,  # admin
+    ).transact()
+    a1.check_tx(tx)
+
+    # TODO: waitUntil
+    for _ in range(5):
+        time.sleep(1)
+        a1.handle_all()
+        if len(a1.accounts) == 1:
+            break
+    assert len(a1.accounts) == 1
+    print(f"registerd {tx}")
+
+    tx = a1.shopReg.functions.removeUser(
+        a1.shop_token_id,
+        "0x" + "42" * 20,
+    ).transact()
+    a1.check_tx(tx)
+    print(f"removed: {tx}")
+
+    # TODO: waitUntil
+    for _ in range(5):
+        time.sleep(1)
+        a1.handle_all()
+        if len(a1.accounts) == 0:
+            break
+    assert len(a1.accounts) == 0
+
+
+def test_subscription_management(make_two_clients: Tuple[RelayClient, RelayClient]):
+    a, b = make_two_clients
+
+    # b only cares about one specific listing
+    b.cancel_subscription(b.subscription)
+    b.handle_all()
+    assert b.errors == 0
+    assert b.subscription == None
+
+    l1 = a.create_listing("small box", 23)
+    l2 = a.create_listing("big box", 123)
+
+    b.handle_all()
+    assert b.errors == 0
+    assert len(b.listings) == 0
+
+    b.subscribe(
+        [
+            subscription_pb2.SubscriptionRequest.Filter(
+                object_type="OBJECT_TYPE_LISTING", object_id=l2
+            ),
+        ]
+    )
+
+    b.handle_all()
+    assert len(b.listings) == 1
+    assert l1.raw not in b.listings
+    assert l2.raw in b.listings
+
+    new_title = "cute box"
+    a.update_listing(l2, title=new_title)
+    a.handle_all()
+    assert a.errors == 0
+
+    b.handle_all()
+    updated = b.listings[l2.raw]
+    assert updated.metadata.title == new_title
+    assert len(b.listings) == 1
+
+
+def test_clerk_create_and_update_listing(make_client):
     a1 = make_client("alice.1")
     shop_id = a1.register_shop()
     a1.enroll_key_card()
@@ -138,122 +256,46 @@ def test_clerk_create_and_update_item(make_client):
 
     # a1 writes an a few events
     a1.create_shop_manifest()
-    item_id = a1.create_item('shoes', '1000')
-    write_req_id = a1.update_item(item_id, price=2000)
+    listing_id = a1.create_listing("shoes", "1000")
+    pb = mtypes.Uint256(raw=int(2000).to_bytes(32, "big"))
+    write_req_id = a1.update_listing(listing_id, price=pb)
     assert a1.errors == 0
     a1_hash = a1._assert_shop_against_response(write_req_id)
 
     # a2 connects after a1 has written events
     a2 = make_client("alice.2")
+    a2.account = a1.account
     a2.shop_token_id = shop_id
     a2.enroll_key_card()
     a2.login()
     a2.handle_all()
     assert a2.errors == 0
-    assert a2.manifest.domain == a1.manifest.domain
-    assert len(a2.items) == 1
-    assert a2.items[item_id].price == '2000.00'
-    assert a2.items[item_id].price == a1.items[item_id].price
+    assert len(a2.listings) == 1
+    assert a2.listings[listing_id.raw].price == pb
+    assert a1.listings[listing_id.raw].price == pb
     assert a2._hash_shop() == a1_hash
 
-    newMetadata = b'{"color": "red"}'
-    req_id2 = a2.update_item(item_id, metadata=newMetadata)
+    newImage = "https://http.cat/status/102"
+    req_id2 = a2.update_listing(listing_id, add_image=newImage)
     a2.handle_all()
     assert a2.errors == 0
+    assert len(a1.listings[listing_id.raw].metadata.images) == 1
     a1.handle_all()
     assert a1.errors == 0
-    assert a1.items[item_id].metadata == newMetadata
+    assert len(a1.listings[listing_id.raw].metadata.images) == 2
     before = a2._assert_shop_against_response(req_id2)
 
-    # try to update non-existant item
+    # try to update non-existant listing
     a2.expect_error = True
-    a2.update_item(os.urandom(32), metadata=newMetadata)
+    a2.update_listing(new_object_id(), title="nope")
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
     assert a2._hash_shop() == before
 
-    # try gigantic metadata
-    a2.errors = 0
-    a2.last_error = None
-    largeMetadata = json.dumps({"a": "b"*10_000}).encode('utf-8')
-    a2.update_item(item_id, metadata=largeMetadata)
-    assert a2.errors == 1
-    assert a2.last_error.code == error_pb2.ERROR_CODES_INVALID
+    # TODO: add tests with too large metadata strings
 
-    # reset error state
-    a2.errors = 0
-    a2.last_error = None
 
-    newLargeMetaItem = os.urandom(32)
-    item = shop_events_pb2.CreateItem(event_id=newLargeMetaItem, metadata=largeMetadata, price=b'01.00')
-    evt = shop_events_pb2.ShopEvent(create_item=item)
-    a2._write_event(evt)
-    assert a2.errors == 1
-    assert a2.last_error.code == error_pb2.ERROR_CODES_INVALID
-
-def test_clerk_invalid_prices(make_client):
-    c = make_client("alice")
-    c.register_shop()
-    c.enroll_key_card()
-    c.login()
-    c.create_shop_manifest()
-    assert c.errors == 0
-
-    # create events by hand to side-step client validation
-    iid = os.urandom(32)
-    meta = {
-        'name': 'bad prices',
-        'description': '',
-        'image': 'https://example.com/image.png',
-    }
-    metadata = json.dumps(meta).encode('utf-8')
-
-    test_cases = [
-        {"price": "", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        {"price": "hello, world", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        {"price": ".00", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        {"price": "123,00", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        {"price": "1000.0", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        {"price": "1000.000", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        {"price": "-1000.00", "expected_error": error_pb2.ERROR_CODES_INVALID},
-        # a bit arbitrary but we currently only support 10 digites total with 2 of them being cents
-        {"price": "123456789.00", "expected_error": error_pb2.ERROR_CODES_INVALID},
-    ]
-
-    c.expect_error = True
-
-    for test_case in test_cases:
-        # reset error state
-        c.errors = 0
-        c.last_error = None
-
-        item = shop_events_pb2.CreateItem(event_id=iid, metadata=metadata, price=test_case["price"])
-        c._write_event(shop_events_pb2.ShopEvent(create_item=item))
-        assert c.errors == 1
-        assert c.last_error.code == test_case["expected_error"]
-
-    # now test updating the price
-    c.errors = 0
-    c.last_error = None
-    c.expect_error = False
-
-    ci = shop_events_pb2.CreateItem(event_id=iid, metadata=metadata, price="123.00")
-    c._write_event(shop_events_pb2.ShopEvent(create_item=ci))
-    assert c.errors == 0
-
-    c.expect_error = True
-
-    for test_case in test_cases:
-        # reset error state
-        c.errors = 0
-        c.last_error = None
-
-        update = shop_events_pb2.UpdateItem(event_id=iid, price=test_case["price"])
-        c._write_event(shop_events_pb2.ShopEvent(update_item=update))
-        assert c.errors == 1
-        assert c.last_error.code == test_case["expected_error"]
-
-def test_clerk_update_item_from_other_shop(make_client):
+def test_clerk_update_listing_from_other_shop(make_client):
     alice = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
@@ -270,56 +312,82 @@ def test_clerk_update_item_from_other_shop(make_client):
     bob.create_shop_manifest()
     assert bob.errors == 0
 
-    alicesItem = alice.create_item('shoes', '1000')
+    alicesListing = alice.create_listing("shoes", "1000")
     assert alice.errors == 0
 
     bob.expect_error = True
-    bob.update_item(alicesItem, price=2000)
+    new_price = mtypes.Uint256(raw=int(666).to_bytes(32, "big"))
+    bob.update_listing(alicesListing, price=new_price)
     assert bob.errors == 1
     assert bob.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
+
+
+def test_clerk_same_ids_with_other_shop(make_client):
+    alice = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.handle_all()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    bob = make_client("bob")
+    bob.register_shop()
+    bob.enroll_key_card()
+    bob.login()
+    bob.handle_all()
+    bob.create_shop_manifest()
+    assert bob.errors == 0
+
+    iid = new_object_id(23)
+
+    alice.create_listing("sneakers", "1000", iid=iid)
+    assert alice.errors == 0
+    bob.create_listing("birkenstock", "1000", iid=iid)
+    assert bob.errors == 0
+
 
 def test_clerk_create_and_edit_tag(make_two_clients):
     a1, a2 = make_two_clients
 
     # a1 writes an a few events
-    iid1 = a1.create_item('sneakers', '1000')
-    iid2 = a1.create_item('birkenstock', '1000')
-    tid = a1.create_tag('shoes')
-    a1.add_item_to_tag(tid, iid1)
-    a1.add_item_to_tag(tid, iid2)
+    iid1 = a1.create_listing("sneakers", "1000")
+    iid2 = a1.create_listing("birkenstock", "1000")
+    tid = a1.create_tag("shoes")
+    a1.add_to_tag(tid, iid1)
+    a1.add_to_tag(tid, iid2)
     assert a1.errors == 0
 
     # a2 syncs
     a2.handle_all()
     assert a2.errors == 0
-    assert a2.manifest.domain == a1.manifest.domain
-    assert len(a2.items) == 2
-    # TODO: make published tag more consistent
-    assert len(a2.tags) == 2
-    tag = a2.tags[tid]
-    assert len(tag.items) == 2
-    assert iid1 in tag.items
-    assert iid2 in tag.items
+    assert len(a2.listings) == 2
+    assert len(a2.tags) == 1
+    tag = a2.tags[tid.raw]
+    assert len(tag.listings) == 2
+    assert iid1.raw in tag.listings
+    assert iid2.raw in tag.listings
 
     a2.remove_from_tag(tid, iid1)
     assert a2.errors == 0
     a1.handle_all()
     assert a1.errors == 0
-    assert iid1 not in a1.tags[tid].items
-    assert iid1 not in a2.tags[tid].items
+    assert iid1.raw not in a1.tags[tid.raw].listings
+    assert iid1.raw not in a2.tags[tid.raw].listings
+
 
 def test_clerk_invalid_tag_interactions(make_two_clients):
     a1, a2 = make_two_clients
 
     # a1 writes an a few events
-    iid1 = a1.create_item('sneakers', '1000')
-    tid = a1.create_tag('shoes')
-    a1.add_item_to_tag(tid, iid1)
+    iid1 = a1.create_listing("sneakers", "1000")
+    tid = a1.create_tag("shoes")
+    a1.add_to_tag(tid, iid1)
     assert a1.errors == 0
 
-    noSuchTagId = os.urandom(32)
+    noSuchTagId = new_object_id()
     a2.expect_error = True
-    a2.add_item_to_tag(noSuchTagId, iid1)
+    a2.add_to_tag(noSuchTagId, iid1)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
@@ -327,32 +395,32 @@ def test_clerk_invalid_tag_interactions(make_two_clients):
     a2.errors = 0
     a2.last_error = None
 
-    noSuchItemId = os.urandom(32)
-    a2.add_item_to_tag(tid, noSuchItemId)
+    noSuchListingId = new_object_id()
+    a2.add_to_tag(tid, noSuchListingId)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
-    # remove item from tag that is not in tag
+    # remove listing from tag that is not in tag
     a2.errors = 0
-    a2.remove_from_tag(noSuchItemId, iid1)
+    a2.remove_from_tag(noSuchListingId, iid1)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
-    # add item to tag that is already in tag
+    # add listing to tag that is already in tag
     a2.errors = 0
-    a2.add_item_to_tag(tid, iid1)
+    a2.add_to_tag(tid, iid1)
     # multiple adds are not an error
     assert a2.errors == 0
 
-    # remove item from tag that is not in shop
+    # remove listing from tag that is not in shop
     a2.errors = 0
-    a2.remove_from_tag(tid, noSuchItemId)
+    a2.remove_from_tag(tid, noSuchListingId)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
     # rename tag that does not exist
     a2.errors = 0
-    a2.rename_tag(noSuchTagId, 'shoes')
+    a2.rename_tag(noSuchTagId, "shoes")
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
@@ -362,93 +430,93 @@ def test_clerk_invalid_tag_interactions(make_two_clients):
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
+
 def test_clerk_rename_and_remove_tag(make_two_clients):
     a1, a2 = make_two_clients
 
     # a1 writes an a few events
-    tid = a1.create_tag('toys')
+    tid = a1.create_tag("toys")
     assert a1.errors == 0
 
     # a2 syncs
     a2.handle_all()
     assert a2.errors == 0
-    assert a2.manifest.domain == a1.manifest.domain
-    assert len(a2.tags) == 2 # TODO: system tags
-    assert tid in a2.tags
-    assert a2.tags[tid].name == 'toys'
+    assert len(a2.tags) == 1
+    assert tid.raw in a2.tags
+    assert a2.tags[tid.raw].name == "toys"
 
-    a2.rename_tag(tid, 'games')
+    a2.rename_tag(tid, "games")
     assert a2.errors == 0
     a1.handle_all()
     assert a1.errors == 0
-    assert a1.tags[tid].name == 'games'
-    assert a2.tags[tid].name == 'games'
+    assert a1.tags[tid.raw].name == "games"
+    assert a2.tags[tid.raw].name == "games"
 
     a2.delete_tag(tid)
     assert a2.errors == 0
     a1.handle_all()
     assert a1.errors == 0
-    assert tid not in a1.tags
-    assert tid not in a2.tags
+    assert tid.raw not in a1.tags
+    assert tid.raw not in a2.tags
 
-def test_clerk_publish_item(make_two_clients):
+
+def test_clerk_publish_listing(make_two_clients):
     a1, a2 = make_two_clients
 
-    # a1 writes a new item
-    iid1 = a1.create_item('sneakers', '1000')
+    # a1 writes a new listing
+    iid1 = a1.create_listing("sneakers", "1000")
     assert a1.errors == 0
     a2.handle_all()
     assert a2.errors == 0
 
     # a2 publishes it
-    a2.add_item_to_tag(a1.manifest.published_tag_id, iid1)
+    new_state = mtypes.LISTING_VIEW_STATE_PUBLISHED
+    a2.update_listing(iid1, state=new_state)
     assert a2.errors == 0
     a1.handle_all()
     assert a1.errors == 0
+    assert a1.listings[iid1.raw].view_state == new_state
 
-    # a1 updates it
-    a1.update_item(iid1, price=32)
-    assert a1.errors == 0
-    a2.handle_all()
-    assert a2.errors == 0
 
-def test_clerk_change_stock(make_two_clients):
+def test_clerk_change_inventory(make_two_clients):
     a1, a2 = make_two_clients
 
     # a1 writes an a few events
-    iid1 = a1.create_item('sneakers', '1000')
-    iid2 = a1.create_item('birkenstock', '1000')
+    iid1 = a1.create_listing("sneakers", "1000")
+    iid2 = a1.create_listing("birkenstock", "1000")
     assert a1.errors == 0
     a2.handle_all()
     assert a2.errors == 0
 
-    # a2 adds some stock
-    a2.change_stock([(iid1, 3), (iid2, 5)])
+    # a2 adds some inventory
+    a2.change_inventory(iid1, 3)
+    a2.change_inventory(iid2, 5)
     assert a2.errors == 0
     a1.handle_all()
     assert a1.errors == 0
-    assert a1.stock[iid1] == 3
-    assert a1.stock[iid2] == 5
+    assert a1.check_inventory(iid1) == 3
+    assert a1.check_inventory(iid2) == 5
 
-def test_clerk_invalid_stock_interactions(make_two_clients, make_client):
+
+def test_clerk_invalid_inventory_interactions(make_two_clients, make_client):
     a1, a2 = make_two_clients
 
     # a1 writes an a few events
-    iid1 = a1.create_item('sneakers', '1000')
+    iid1 = a1.create_listing("sneakers", "1000")
     assert a1.errors == 0
     a2.handle_all()
     assert a2.errors == 0
 
-    # a2 adds some stock
-    a2.change_stock([(iid1, 3)])
+    # a2 adds some inventory
+    a2.change_inventory(iid1, 3)
     assert a2.errors == 0
     a1.handle_all()
     assert a1.errors == 0
-    assert a1.stock[iid1] == 3
+    assert a1.check_inventory(iid1) == 3
 
-    # a2 tries to add negative stock
+    # a2 tries to add negative inventory
     a2.expect_error = True
-    a2.change_stock([(iid1, -4)])
+    a2.change_inventory(iid1, -4)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_OUT_OF_STOCK
 
@@ -456,9 +524,9 @@ def test_clerk_invalid_stock_interactions(make_two_clients, make_client):
     a2.errors = 0
     a2.last_error = None
 
-    # a2 tries to add stock for non-existant item
+    # a2 tries to add inventory for non-existant listing
     a2.expect_error = True
-    a2.change_stock([(os.urandom(32), 1)])
+    a2.change_inventory(new_object_id(), 1)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
@@ -473,11 +541,317 @@ def test_clerk_invalid_stock_interactions(make_two_clients, make_client):
     bob.login()
     bob.handle_all()
     bob.create_shop_manifest()
-    foreignItemId = bob.create_item('flute', '1000')
+    foreignListingId = bob.create_listing("flute", "1000")
     assert bob.errors == 0
 
-    # a2 tries to add stock for item in other shopy
+    # a2 tries to add inventory for listing in other shopy
     a2.expect_error = True
-    a2.change_stock([(foreignItemId, 1)])
+    a2.change_inventory(foreignListingId, 1)
     assert a2.errors == 1
     assert a2.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
+
+
+def skip_test_against_zero_ids(make_two_clients):
+    a1, a2 = make_two_clients
+
+    checks = 0
+
+    def assert_clients():
+        nonlocal checks
+        assert a1.errors == 1
+        a2.handle_all()
+        assert a2.errors == 0
+
+        a1.last_error = None
+        a1.errors = 0
+        checks += 1
+
+    a1.expect_error = True
+    zero = mtypes.ObjectId(raw=bytes(8))
+    a1.create_listing("zero", 0, iid=zero)
+    assert_clients()
+    assert len(a2.listings) == 0
+
+    a1.create_tag("zero", tag_id=zero)
+    assert_clients()
+    assert len(a2.tags) == 0
+
+    a1.create_order(oid=zero)
+    assert_clients()
+    assert len(a2.orders) == 0
+
+    a1.update_listing(zero, title="zero")
+    assert_clients()
+
+    a1.rename_tag(zero, "zero")
+    assert_clients()
+
+    a1.add_to_tag(zero, zero)
+    assert_clients()
+
+    a1.remove_from_tag(zero, zero)
+    assert_clients()
+
+    a1.delete_tag(zero)
+    assert_clients()
+
+    a1.add_to_order(zero, zero, 1)
+    assert_clients()
+
+    a1.change_inventory(zero, 1)
+    assert_clients()
+
+    assert checks == 10
+
+
+def test_listing_with_variation(make_two_clients):
+    a1, a2 = make_two_clients
+
+    lid = a1.create_listing("sneaker", "95")
+
+    # add a new option
+    size_s = mtypes.ListingVariation(
+        id=new_object_id(),
+        variation_info=mtypes.ListingMetadata(
+            title="S",
+            description="small",
+        ),
+    )
+    size_m = mtypes.ListingVariation(
+        id=new_object_id(),
+        variation_info=mtypes.ListingMetadata(
+            title="M",
+            description="medium",
+        ),
+    )
+    size_l = mtypes.ListingVariation(
+        id=new_object_id(),
+        variation_info=mtypes.ListingMetadata(
+            title="L",
+            description="large",
+        ),
+    )
+    opt_size = mtypes.ListingOption(
+        id=new_object_id(),
+        title="size",
+        variations=[size_s, size_m, size_l],
+    )
+    a1.update_listing(lid, add_option=opt_size)
+    assert a1.errors == 0
+
+    # wait for all events to be applied
+    for _ in range(10):
+        a1.handle_all()
+        assert a1.errors == 0
+        if len(a1.listings[lid.raw].options) == 1:
+            break
+    listing = a1.listings[lid.raw]
+    assert len(listing.options) == 1, f"option not added: {listing}"
+    assert len(listing.options[0].variations) == 3
+
+    # add variation to existing option
+    size_xl = mtypes.ListingVariation(
+        id=new_object_id(),
+        variation_info=mtypes.ListingMetadata(
+            title="XL",
+            description="extra-large",
+        ),
+    )
+    add_size_var = mevents.UpdateListing.AddVariation(
+        option_id=opt_size.id, variation=size_xl
+    )
+    a1.update_listing(lid, add_variation=add_size_var)
+    assert a1.errors == 0
+
+    # wait for all events to be applied
+    for _ in range(10):
+        a1.handle_all()
+        assert a1.errors == 0
+    listing = a1.listings[lid.raw]
+    assert listing is not None
+    assert len(listing.options) == 1
+    assert len(listing.options[0].variations) == 4
+
+    # remove tests
+    a1.update_listing(lid, remove_variation=size_m.id)
+    assert a1.errors == 0
+    assert len(listing.options[0].variations) == 3
+
+    opt_silly = mtypes.ListingOption(
+        id=new_object_id(),
+        title="nope",
+        variations=[
+            mtypes.ListingVariation(
+                id=new_object_id(),
+                variation_info=mtypes.ListingMetadata(title="nope", description="nope"),
+            ),
+        ],
+    )
+    a1.update_listing(lid, add_option=opt_silly)
+    assert a1.errors == 0
+    assert len(listing.options) == 2
+    a1.update_listing(lid, remove_option=opt_silly.id)
+    assert a1.errors == 0
+    assert len(listing.options) == 1
+
+    # stock tests
+    a1.change_inventory(lid, 1, [size_s.id])
+    a1.change_inventory(lid, 2, [size_l.id])
+    a1.change_inventory(lid, 3, [size_xl.id])
+    assert a1.errors == 0
+    assert a1.check_inventory(lid, [size_s.id]) == 1
+    assert a1.check_inventory(lid, [size_m.id]) == 0
+    assert a1.check_inventory(lid, [size_l.id]) == 2
+    assert a1.check_inventory(lid, [size_xl.id]) == 3
+
+    # sync 2nd client to test event push handling
+    a2.handle_all()
+    assert a2.errors == 0
+    assert a2.check_inventory(lid, [size_s.id]) == 1
+    assert a2.check_inventory(lid, [size_m.id]) == 0
+    assert a2.check_inventory(lid, [size_l.id]) == 2
+    assert a2.check_inventory(lid, [size_xl.id]) == 3
+
+
+def test_invalid_add_variation_to_nonexistent_option(make_two_clients):
+    a1, _ = make_two_clients
+
+    lid = a1.create_listing("t-shirt", "50")
+
+    # Trying to add a variation to a non-existing option
+    size_xxl = mtypes.ListingVariation(
+        id=new_object_id(),
+        variation_info=mtypes.ListingMetadata(
+            title="XXL",
+            description="extra-extra-large",
+        ),
+    )
+    nonexistent_option_id = new_object_id()
+    add_var_nonexistent = mevents.UpdateListing.AddVariation(
+        option_id=nonexistent_option_id, variation=size_xxl
+    )
+    a1.expect_error = True
+    a1.update_listing(lid, add_variation=add_var_nonexistent)
+
+    assert a1.errors != 0, "Expecting an error since the option doesn't exist"
+
+
+sixsixsix = mtypes.ObjectId(raw=b"66666666")
+
+
+def test_invalid_variation_remove_nonexistents(make_two_clients):
+    a1, _ = make_two_clients
+
+    a1.expect_error = True
+
+    lid = a1.create_listing("t-shirt", "50")
+
+    a1.update_listing(lid, remove_variation=sixsixsix)
+    assert a1.errors != 0
+
+    a1.errors = 0
+    a1.update_listing(lid, remove_option=sixsixsix)
+    assert a1.errors != 0
+
+
+def test_invalid_add_option_with_taken_id(make_two_clients):
+    a1, _ = make_two_clients
+
+    lid = a1.create_listing("hat", "25")
+
+    # Add an option
+    color_option = mtypes.ListingOption(
+        id=new_object_id(),
+        title="color",
+        variations=[
+            mtypes.ListingVariation(
+                id=new_object_id(),
+                variation_info=mtypes.ListingMetadata(
+                    title="red", description="red color"
+                ),
+            ),
+        ],
+    )
+    a1.update_listing(lid, add_option=color_option)
+    assert a1.errors == 0
+
+    # Try adding another option with the same ID
+    duplicate_id_option = mtypes.ListingOption(
+        id=color_option.id,  # same ID as the existing color option
+        title="material",
+        variations=[
+            mtypes.ListingVariation(
+                id=new_object_id(),
+                variation_info=mtypes.ListingMetadata(
+                    title="cotton", description="cotton material"
+                ),
+            ),
+        ],
+    )
+    a1.expect_error = True
+    a1.update_listing(lid, add_option=duplicate_id_option)
+    assert a1.errors != 0, "Expecting an error due to duplicate ID"
+
+
+def test_invalid_add_variation_with_taken_id(make_two_clients):
+    a1, _ = make_two_clients
+
+    lid = a1.create_listing("watch", "150")
+
+    # Add an option
+    size_option = mtypes.ListingOption(
+        id=new_object_id(),
+        title="size",
+        variations=[
+            mtypes.ListingVariation(
+                id=new_object_id(),
+                variation_info=mtypes.ListingMetadata(
+                    title="small", description="small size"
+                ),
+            ),
+        ],
+    )
+    a1.update_listing(lid, add_option=size_option)
+    assert a1.errors == 0
+
+    # Add another variation with the same ID
+    duplicate_id_variation = mtypes.ListingVariation(
+        id=size_option.variations[0].id,  # same ID as the existing small variation
+        variation_info=mtypes.ListingMetadata(
+            title="medium", description="medium size"
+        ),
+    )
+    add_duplicate_variation = mevents.UpdateListing.AddVariation(
+        option_id=size_option.id, variation=duplicate_id_variation
+    )
+    a1.expect_error = True
+    a1.update_listing(lid, add_variation=add_duplicate_variation)
+
+    assert a1.errors != 0, "Expecting an error due to duplicate ID"
+
+    a1.errors = 0
+
+    # variation ids are unique per listing
+    color_option = mtypes.ListingOption(
+        id=new_object_id(),
+        title="color",
+        variations=[
+            mtypes.ListingVariation(
+                id=size_option.variations[0].id,  # taken id
+                variation_info=mtypes.ListingMetadata(
+                    title="red", description="primary color 1"
+                ),
+            ),
+        ],
+    )
+    a1.update_listing(lid, add_option=color_option)
+    assert a1.errors == 0
+
+
+def test_invalid_change_stock_of_non_existent_variation(make_two_clients):
+    a1, _ = make_two_clients
+    lid = a1.create_listing("watch", "150")
+
+    a1.expect_error = True
+    a1.change_inventory(lid, 23, [sixsixsix, new_object_id()])
+    assert a1.errors != 0, "variation shouldn't exist"

@@ -1,4 +1,7 @@
-{ pkgs, contracts }: let
+{
+  pkgs,
+  contracts,
+}: let
   ourPython = pkgs.python311;
 
   pyunormalize = ourPython.pkgs.buildPythonPackage rec {
@@ -8,7 +11,7 @@
       inherit pname version;
       hash = "sha256-z0qHRRoPHLdpEaqX9DL0V54fVkovDITOSIxzpzkBtsE=";
     };
-    buildInputs = [ pinnedPython.pkgs.setuptools ];
+    buildInputs = [pinnedPython.pkgs.setuptools];
     # le sigh...
     postUnpack = ''
       sed -i 's/version=get_version()/version="${version}"/' ${pname}-${version}/setup.py
@@ -23,8 +26,8 @@
       inherit pname version;
       hash = "sha256-QpWsw4D41C6+pKSgpoxCSjIrszWjO60Fxy6tjLso0Rg=";
     };
-    nativeBuildInputs = [ pkgs.clang ];
-    buildInputs = [ pinnedPython.pkgs.setuptools ];
+    nativeBuildInputs = [pkgs.clang];
+    buildInputs = [pinnedPython.pkgs.setuptools];
   };
 
   packageOverrides = self: super: {
@@ -44,12 +47,14 @@
         inherit pname version;
         sha256 = "sha256-tD2vLArkPyokunVNZoifBD+uTTURVZyybrASK66a+70=";
       };
-      propagatedBuildInputs = super.eth-account.propagatedBuildInputs ++ [
-        ckzg
-        pinnedPython.pkgs.pydantic
-        pinnedPython.pkgs.eth-keyfile
-        pinnedPython.pkgs.hexbytes
-      ];
+      propagatedBuildInputs =
+        super.eth-account.propagatedBuildInputs
+        ++ [
+          ckzg
+          pinnedPython.pkgs.pydantic
+          pinnedPython.pkgs.eth-keyfile
+          pinnedPython.pkgs.hexbytes
+        ];
     });
 
     web3 = super.web3.overridePythonAttrs (old: rec {
@@ -59,9 +64,11 @@
         inherit pname version;
         sha256 = "sha256-opvBhjc04cBfEo3bxWh48pnqcXdoBuZntYGoO11b4O0";
       };
-      propagatedBuildInputs = super.web3.propagatedBuildInputs ++ [
-        pyunormalize
-      ];
+      propagatedBuildInputs =
+        super.web3.propagatedBuildInputs
+        ++ [
+          pyunormalize
+        ];
     });
   };
 
@@ -72,10 +79,10 @@
 
   massmarket_hash_event = pinnedPython.pkgs.buildPythonPackage rec {
     pname = "massmarket_hash_event";
-    version = "2.0";
-    src = ourPython.pkgs.fetchPypi {
+    version = "3.0";
+    src = pkgs.python3.pkgs.fetchPypi {
       inherit pname version;
-      hash = "sha256-9qnF6TZd4KUM5J1Lo1rgeLvTRSI4GRCEoeFz/tnaqdI";
+      hash = "sha256-vc9oSq7wt9s+qLSJTuhTAw4TFHmtBTGh5VGkSgPX7cQ=";
     };
     # to test pre-releases run 'make build' in network-schema/python and update the path below
     # src = /home/cryptix/Mass/network-schema/python/dist/massmarket_hash_event-${version}.tar.gz;
@@ -88,7 +95,7 @@
     ];
   };
 
-   abnf = pinnedPython.pkgs.buildPythonPackage rec {
+  abnf = pinnedPython.pkgs.buildPythonPackage rec {
     pname = "abnf";
     version = "2.2.0";
     src = ourPython.pkgs.fetchPypi {
@@ -100,11 +107,11 @@
       pinnedPython.pkgs.setuptools
       pinnedPython.pkgs.setuptools-scm
     ];
-   };
+  };
 
-   siwe = pinnedPython.pkgs.buildPythonPackage rec {
-     pname = "siwe";
-     version = "4.0.0";
+  siwe = pinnedPython.pkgs.buildPythonPackage rec {
+    pname = "siwe";
+    version = "4.0.0";
     src = ourPython.pkgs.fetchPypi {
       inherit pname version;
       hash = "sha256-j1sSBCszXCCPKrDOzOlVomAy7F/4q0J5Tjwqtjo83TM";
@@ -117,24 +124,34 @@
       abnf
       pinnedPython.pkgs.pydantic
     ];
-   };
+  };
 
   mass-python-packages = ps:
-    with ps; [
-      setuptools
-      pytest
-      websockets
-      web3
-      safe-pysha3
-      siwe
-      massmarket_hash_event
-    ];
+    with ps; ([
+        setuptools
+        pytest
+        pytest-timeout
+        pytest-xdist
+        pytest-repeat
+        pytest-random-order
+        pytest-benchmark
+        factory-boy
+        humanize
+        websockets
+        web3
+        safe-pysha3
+        filelock
+      ]
+      ++ [
+        siwe
+        massmarket_hash_event
+      ]);
   mass-python = pinnedPython.withPackages mass-python-packages;
 
   contracts_abi = contracts.packages.${pkgs.system}.default;
 in
   pkgs.mkShell {
-    buildInputs = [mass-python pkgs.pyright];
+    buildInputs = [mass-python pkgs.pyright pkgs.black];
     shellHook = ''
       export $(egrep -v '^#' .env | xargs)
       export PYTHON=${mass-python}/bin/python

@@ -10,13 +10,12 @@ from massmarket_hash_event import shop_pb2, shop_events_pb2
 
 cid = 11155111
 
-def demo_client():
-    rc = RelayClient(
-        relay_token_id = 0,
-        chain_id=cid
-    )
-    rc.shop_token_id = int("805e83d38d5c946bc1559f7d80ce94bce13a4cc0ec4640426bc81835f5958a57", 16)
 
+def demo_client():
+    rc = RelayClient(relay_token_id=0, chain_id=cid)
+    rc.shop_token_id = int(
+        "805e83d38d5c946bc1559f7d80ce94bce13a4cc0ec4640426bc81835f5958a57", 16
+    )
 
     rc.enroll_key_card()
     assert rc.errors == 0
@@ -45,12 +44,16 @@ def demo_client():
 
     return rc
 
+
 def currencies():
     tok = binascii.unhexlify("be9fe9b717c888a2b2ca0a6caa639afe369249c5")
     curr = shop_pb2.ShopCurrency(chain_id=cid, token_addr=tok)
     owner = binascii.unhexlify("b6eD252e6813340aadfa602d3Dbc219ec20D4069")
-    p = shop_events_pb2.UpdateShopManifest.Payee(name="default", chain_id=cid, addr=owner)
+    p = shop_events_pb2.UpdateShopManifest.Payee(
+        name="default", chain_id=cid, addr=owner
+    )
     return (curr, p)
+
 
 if __name__ == "__main__":
     demo_client()

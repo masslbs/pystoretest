@@ -1,7 +1,7 @@
 {
   description = "Mass Market Relay Testing";
 
-  inputs  = {
+  inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     contracts.url = "github:masslbs/contracts";
