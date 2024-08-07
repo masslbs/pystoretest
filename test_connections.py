@@ -151,9 +151,9 @@ def test_cant_connect_twice_with_same_keycard(make_client):
     a2.own_key_card = a1.own_key_card
     a1.login()
     assert a1.logged_in == True
-    with pytest.raises(RelayException) as e:
+    expect = 'Already connected from this device in another session'
+    with pytest.raises(RelayException, match=expect):
         a2.login()
-    assert e.code == error_pb2.ERROR_CODES_ALREADY_CONNECTED
     assert a2.logged_in == False
     a1.close()
     a2.close()
