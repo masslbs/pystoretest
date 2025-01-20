@@ -1396,7 +1396,7 @@ class RelayClient:
             um.remove_shipping_regions.append(r)
         self._write_event(update_manifest=um)
 
-    def create_listing(self, name: str, price: int, iid=None):
+    def create_listing(self, name: str, price: int, iid=None, wait=True):
         if iid is None:
             iid = new_object_id()
         if iid.raw in self.listings:
@@ -1412,6 +1412,12 @@ class RelayClient:
             price=int_to_uint256(price),
         )
         self._write_event(listing=listing)
+        if wait and not self.expect_error:
+            i = 10
+            while iid.raw not in self.listings:
+                self.handle_all()
+                i -= 1
+                assert i > 0, "create listing timeout"
         return iid
 
     def update_listing(

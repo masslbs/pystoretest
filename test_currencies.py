@@ -21,11 +21,6 @@ def setup_shop_with_listing(make_client) -> Tuple[RelayClient, bytes]:
     assert alice.errors == 0
 
     iid = alice.create_listing("sneakers", 10)
-    i = 10
-    while iid.raw not in alice.listings:
-        alice.handle_all()
-        i -= 1
-        assert i > 0, "timeout"
     alice.change_inventory(iid, 20)
     assert alice.errors == 0
 
