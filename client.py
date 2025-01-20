@@ -1498,13 +1498,19 @@ class RelayClient:
         delete = mevents.UpdateTag(id=tag_id, delete=True)
         self._write_event(update_tag=delete)
 
-    def create_order(self, oid=None):
+    def create_order(self, oid=None, wait=True):
         if oid is None:
             oid = new_object_id()
         if not self.expect_error and oid.raw in self.orders:
             raise Exception("Order already exists: {}".format(oid))
         order = mevents.CreateOrder(id=oid)
         self._write_event(create_order=order)
+        if wait and not self.expect_error:
+            i = 10
+            while oid.raw not in self.orders:
+                self.handle_all()
+                i -= 1
+                assert i > 0, "create order timeout"
         return oid
 
     def add_to_order(self, order_id, listing_id, quantity, variations=None):
