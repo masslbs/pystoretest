@@ -48,6 +48,7 @@ class EnrollException(Exception):
     def __init__(self, http_code, err: str):
         super().__init__(err)
         self.http_code = http_code
+        self.message = err
 
 
 class NamedTag:
@@ -293,7 +294,7 @@ class RelayClient:
             self.own_key_card = Account.create()
             print(f"new key card: {self.own_key_card}")
         else:
-            Account.from_key(key_card_private_key)
+            self.own_key_card = Account.from_key(key_card_private_key)
         self.last_event_nonce = 1  # TODO persist!
         self.valid_addrs = []
         self.all_key_cards = {}

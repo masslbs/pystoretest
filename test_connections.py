@@ -52,22 +52,22 @@ def test_keycard_invalid(account_manager):
             ],
         )
 
-    with pytest.raises(EnrollException) as e:
+    with pytest.raises(EnrollException):
         m = make()
         m.domain = "some.where.else"
         rc.enroll_key_card(siwe_msg=m)
 
-    with pytest.raises(EnrollException) as e:
+    with pytest.raises(EnrollException):
         m = make()
         m.uri = "https://not.the.relay/foo"
         rc.enroll_key_card(siwe_msg=m)
 
-    with pytest.raises(EnrollException) as e:
+    with pytest.raises(EnrollException):
         m = make()
         m.uri += "/messed/up/the/path"
         rc.enroll_key_card(siwe_msg=m)
 
-    with pytest.raises(EnrollException) as e:
+    with pytest.raises(EnrollException):
         m = make()
         m.address = "0x" + "00" * 20
         rc.enroll_key_card(siwe_msg=m)
@@ -112,6 +112,32 @@ def test_keycard_invalid(account_manager):
         kc = kc + "00" * 5
         m.resources[2] = kc
         rc.enroll_key_card(siwe_msg=m)
+
+
+def test_keycard_cant_enroll_twice(wc_shop: RelayClient):
+    # first works
+    wc_shop.login()
+    wc_shop.handle_all()
+    assert wc_shop.logged_in == True
+    wc_shop.handle_all()
+
+    # 2nd enroll fails
+    other_client = RelayClient(
+        name="other",
+        wallet_private_key=wc_shop.account.key,
+        key_card_private_key=wc_shop.own_key_card.key,
+        auto_connect=False,
+    )
+    other_client.shop_token_id = wc_shop.shop_token_id
+    with pytest.raises(EnrollException) as e:
+        other_client.enroll_key_card()
+    assert e.type is EnrollException
+    assert e.value.http_code == 409
+
+    wc_shop.handle_all()
+    assert wc_shop.logged_in == True
+    assert wc_shop.connected == True
+    wc_shop.close()
 
 
 def test_pingpong(wc_shop: RelayClient):
