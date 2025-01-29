@@ -16,7 +16,7 @@ from sha3 import keccak_256
 from websockets.sync.client import connect
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from web3 import Web3, Account, HTTPProvider
-from web3.middleware import construct_sign_and_send_raw_middleware
+from web3.middleware import SignAndSendRawMiddlewareBuilder
 from web3.exceptions import TransactionNotFound
 from eth_keys import keys
 from eth_account.messages import encode_defunct
@@ -111,7 +111,7 @@ def int_to_uint256(i):
 
 
 def now_pbts() -> timestamp_pb2.Timestamp:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC)
     ts = timestamp_pb2.Timestamp()
     ts.FromDatetime(now)
     return ts
@@ -141,7 +141,7 @@ def transact_with_retry(w3, account, contract_call, max_attempts=3):
             )
 
             signed_tx = w3.eth.account.sign_transaction(tx, account.key)
-            tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
             return tx_hash
         except ValueError as e:
             assert (
@@ -284,8 +284,8 @@ class RelayClient:
         print("{} is using address: {}".format(name, account.address))
         self.account = account
         self.w3.eth.default_account = account.address
-        sign_mw = construct_sign_and_send_raw_middleware(self.account)
-        self.w3.middleware_onion.add(sign_mw)
+        sign_mw = SignAndSendRawMiddlewareBuilder.build(self.account)
+        self.w3.middleware_onion.inject(sign_mw, layer=0)
 
         # mass state
         self.last_request_id = 0
@@ -525,7 +525,7 @@ class RelayClient:
         if siwe_msg is None:
             kc_hex = keyCard.public_key.to_hex()
 
-            now = datetime.datetime.utcnow().isoformat() + "Z"
+            now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00","Z")
             siwe_msg = siwe.SiweMessage(
                 domain=self.relay_addr.netloc,
                 address=self.account.address,

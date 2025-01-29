@@ -33,7 +33,7 @@ def test_keycard_invalid(account_manager):
     keyCard = keys.PrivateKey(rc.own_key_card.key)
     kc_hex = keyCard.public_key.to_hex()
     enroll_url = rc.relay_addr._replace(path="/v3/enroll_key_card").geturl()
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00","Z")
 
     def make():
         return siwe.SiweMessage(

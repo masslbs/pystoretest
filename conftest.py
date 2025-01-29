@@ -10,7 +10,7 @@ import filelock
 
 import pytest
 from web3 import Web3, Account, HTTPProvider
-from web3.middleware import construct_sign_and_send_raw_middleware
+from web3.middleware import SignAndSendRawMiddlewareBuilder
 
 from client import RelayClient, check_transaction
 
@@ -143,8 +143,8 @@ class TestAccountManager:
     ):
         self.funded_account = funded_account
         self.w3 = Web3(HTTPProvider(os.getenv("ETH_RPC_URL")))
-        sign_mw = construct_sign_and_send_raw_middleware(self.funded_account)
-        self.w3.middleware_onion.add(sign_mw)
+        sign_mw = SignAndSendRawMiddlewareBuilder.build(self.funded_account)
+        self.w3.middleware_onion.inject(sign_mw, layer=0)
 
         self.initial_balance = initial_balance
 

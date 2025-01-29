@@ -2,7 +2,7 @@
   pkgs,
   contracts,
 }: let
-  ourPython = pkgs.python311;
+  ourPython = pkgs.python313;
 
   pyunormalize = ourPython.pkgs.buildPythonPackage rec {
     pname = "pyunormalize";
@@ -42,11 +42,12 @@
 
     eth-account = super.eth-account.overridePythonAttrs (old: rec {
       pname = "eth-account";
-      version = "0.11.2";
-      src = self.fetchPypi {
-        inherit pname version;
-        sha256 = "sha256-tD2vLArkPyokunVNZoifBD+uTTURVZyybrASK66a+70=";
-      };
+      version = "0.13.4";
+      # src = self.fetchPypi {
+      #   inherit pname version;
+      #   sha256 = "sha256-sq0a5jovZb149eCorFEKmPNgekPx2yqNRmNqXZ6KMME";
+      # };
+      src = ./eth_account-0.13.4.tar.gz;
       propagatedBuildInputs =
         super.eth-account.propagatedBuildInputs
         ++ [
@@ -59,10 +60,10 @@
 
     web3 = super.web3.overridePythonAttrs (old: rec {
       pname = "web3";
-      version = "6.20.1";
+      version = "7.7.0";
       src = self.fetchPypi {
         inherit pname version;
-        sha256 = "sha256-opvBhjc04cBfEo3bxWh48pnqcXdoBuZntYGoO11b4O0";
+        sha256 = "sha256-TQMyuaeLhV5XzOvZ4edMjoVblYaax7j+WHhzFZPnZAg";
       };
       propagatedBuildInputs =
         super.web3.propagatedBuildInputs
@@ -75,6 +76,37 @@
   pinnedPython = ourPython.override {
     inherit packageOverrides;
     self = ourPython;
+  };
+
+  abnf = pinnedPython.pkgs.buildPythonPackage rec {
+    pname = "abnf";
+    version = "2.2.0";
+  src = ourPython.pkgs.fetchPypi {
+      inherit pname version;
+      hash = "sha256-QzOA/TKFW7xgvHs9NdQGFuITg6Mu0cm4iT0W2fSmwvQ";
+    };
+    format = "pyproject";
+    buildInputs = [
+      pinnedPython.pkgs.setuptools
+      pinnedPython.pkgs.setuptools-scm
+    ];
+  };
+
+  siwe = pinnedPython.pkgs.buildPythonPackage rec {
+    pname = "siwe";
+    version = "4.4.0";
+    src = ourPython.pkgs.fetchPypi {
+      inherit pname version;
+      hash = "sha256-X9+EMlOpHXgIXx2hHtfJaVu7dD4RLaZY5jooXd8//sc";
+    };
+    format = "pyproject";
+    propagatedBuildInputs = [
+      pinnedPython.pkgs.poetry-core
+      pkgs.protobuf
+      pinnedPython.pkgs.web3
+      abnf
+      pinnedPython.pkgs.pydantic
+    ];
   };
 
   massmarket_hash_event = pinnedPython.pkgs.buildPythonPackage rec {
@@ -92,37 +124,6 @@
       pinnedPython.pkgs.setuptools-scm
       pkgs.protobuf
       pinnedPython.pkgs.web3
-    ];
-  };
-
-  abnf = pinnedPython.pkgs.buildPythonPackage rec {
-    pname = "abnf";
-    version = "2.2.0";
-    src = ourPython.pkgs.fetchPypi {
-      inherit pname version;
-      hash = "sha256-QzOA/TKFW7xgvHs9NdQGFuITg6Mu0cm4iT0W2fSmwvQ";
-    };
-    format = "pyproject";
-    buildInputs = [
-      pinnedPython.pkgs.setuptools
-      pinnedPython.pkgs.setuptools-scm
-    ];
-  };
-
-  siwe = pinnedPython.pkgs.buildPythonPackage rec {
-    pname = "siwe";
-    version = "4.0.0";
-    src = ourPython.pkgs.fetchPypi {
-      inherit pname version;
-      hash = "sha256-j1sSBCszXCCPKrDOzOlVomAy7F/4q0J5Tjwqtjo83TM";
-    };
-    format = "pyproject";
-    propagatedBuildInputs = [
-      pinnedPython.pkgs.poetry-core
-      pkgs.protobuf
-      pinnedPython.pkgs.web3
-      abnf
-      pinnedPython.pkgs.pydantic
     ];
   };
 
