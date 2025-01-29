@@ -648,6 +648,7 @@ def test_listing_with_variation(make_two_clients):
     listing = a1.listings[lid.raw]
     assert len(listing.options) == 1, f"option not added: {listing}"
     assert len(listing.options[0].variations) == 3
+    a2.handle_all()
 
     # add variation to existing option
     size_xl = mtypes.ListingVariation(
@@ -671,6 +672,7 @@ def test_listing_with_variation(make_two_clients):
     assert listing is not None
     assert len(listing.options) == 1
     assert len(listing.options[0].variations) == 4
+    a2.handle_all()
 
     # remove tests
     a1.update_listing(lid, remove_variation=size_m.id)
@@ -693,6 +695,8 @@ def test_listing_with_variation(make_two_clients):
     a1.update_listing(lid, remove_option=opt_silly.id)
     assert a1.errors == 0
     assert len(listing.options) == 1
+    
+    a2.handle_all()
 
     # stock tests
     a1.change_inventory(lid, 1, [size_s.id])

@@ -32,7 +32,7 @@ def test_invite_another_user(wc_auth: RelayClient):
         "chainId": owner.chain_id,
     }
     signed_txn = owner.account.sign_transaction(transaction)
-    tx_hash = owner.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+    tx_hash = owner.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
     owner.check_tx(tx_hash)
 
     # use token
