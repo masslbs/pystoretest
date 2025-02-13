@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 import datetime
 import requests
 import time
@@ -7,7 +11,7 @@ from websockets.exceptions import ConnectionClosedError
 from eth_keys import keys
 import siwe
 
-from massmarket_hash_event import envelope_pb2, subscription_pb2, base_types_pb2
+from massmarket import envelope_pb2, subscription_pb2, base_types_pb2
 
 from client import RelayClient, RelayException, EnrollException
 
@@ -18,7 +22,7 @@ def test_register_shop(wc_conn: RelayClient):
 
 
 def test_keycard_login(wc_shop: RelayClient):
-    wc_shop.login()
+    wc_shop.login(subscribe=False)
     wc_shop.handle_all()
     assert wc_shop.logged_in == True
     wc_shop.close()
@@ -33,7 +37,7 @@ def test_keycard_invalid(account_manager):
     keyCard = keys.PrivateKey(rc.own_key_card.key)
     kc_hex = keyCard.public_key.to_hex()
     enroll_url = rc.relay_addr._replace(path="/v3/enroll_key_card").geturl()
-    now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00","Z")
+    now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
     def make():
         return siwe.SiweMessage(
@@ -116,7 +120,7 @@ def test_keycard_invalid(account_manager):
 
 def test_keycard_cant_enroll_twice(wc_shop: RelayClient):
     # first works
-    wc_shop.login()
+    wc_shop.login(subscribe=False)
     wc_shop.handle_all()
     assert wc_shop.logged_in == True
     wc_shop.handle_all()
@@ -141,7 +145,7 @@ def test_keycard_cant_enroll_twice(wc_shop: RelayClient):
 
 
 def test_pingpong(wc_shop: RelayClient):
-    wc_shop.login()
+    wc_shop.login(subscribe=False)
     wc_shop.handle_all()
     assert wc_shop.logged_in == True
     have_pongs = False
@@ -165,7 +169,7 @@ def test_no_pong_disconnects(wc_shop: RelayClient):
 # A user can dis- and re-connect multiple times
 # TODO: keep track of seqno across connections
 def skip_test_reconnect(wc_shop: RelayClient):
-    wc_shop.login()
+    wc_shop.login(subscribe=False)
     wc_shop.handle_all()
     assert wc_shop.logged_in == True
     # wait for session to flush so that we dont get the first message sent twice
@@ -176,7 +180,7 @@ def skip_test_reconnect(wc_shop: RelayClient):
     wc_shop.close()
     assert wc_shop.connected == False
     assert wc_shop.logged_in == False
-    wc_shop.login()
+    wc_shop.login(subscribe=False)
     assert wc_shop.connected == True
     wc_shop.handle_all()
     assert wc_shop.logged_in == True
@@ -191,11 +195,11 @@ def test_cant_connect_twice_with_same_keycard(make_client):
     a2.shop_token_id = shop_id
     # re-use the same keycard
     a2.own_key_card = a1.own_key_card
-    a1.login()
+    a1.login(subscribe=False)
     assert a1.logged_in == True
-    expect = "Already connected from this device in another session"
+    expect = "Already connected from this keyCard in another session"
     with pytest.raises(RelayException, match=expect):
-        a2.login()
+        a2.login(subscribe=False)
     assert a2.logged_in == False
     a1.close()
     a2.close()
@@ -210,14 +214,14 @@ def test_clerk_blob_upload(wc_auth: RelayClient):
         assert wc_auth.errors == 0
     urlResp = wc_auth.outgoingRequests[req_id]
     files = {
-        "file": ("filename.txt", open("testcat.jpg", "rb"), "application/octet-stream")
+        "file": ("filename.txt", open("testcats.md", "rb"), "application/octet-stream")
     }
     uploadResp = requests.post(urlResp["url"], files=files)
     assert uploadResp.status_code == 201
     uploadJson = uploadResp.json()
     assert (
         uploadJson["ipfs_path"]
-        == "/ipfs/Qma8tx56NLeSi2we2R41C8haSNj9kyRooxrJptyLvncbWf"
+        == "/ipfs/QmYmJ2jrDW6LGKpSFhg51KuPgiWPDET1xqB21Evn3m13vV"
     )
     wc_auth.close()
 
@@ -230,6 +234,7 @@ def test_invalid_envelope(wc_auth: RelayClient):
     data = no_req_id.SerializeToString()
 
     with pytest.raises(ConnectionClosedError) as e:
+        assert wc_auth.connection is not None
         wc_auth.connection.send(data)
         wc_auth.handle_all()
     assert wc_auth.connected == False
@@ -244,6 +249,7 @@ def test_invalid_envelope(wc_auth: RelayClient):
     data = no_msg.SerializeToString()
 
     with pytest.raises(ConnectionClosedError) as e:
+        assert wc_auth.connection is not None
         wc_auth.connection.send(data)
         wc_auth.handle_all()
     assert wc_auth.connected == False

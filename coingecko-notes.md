@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2025 Mass Labs
+
+SPDX-License-Identifier: MIT
+-->
 
 # get ID of your coin
 curl -X 'GET' \ 

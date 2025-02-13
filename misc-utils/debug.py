@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 from client import RelayClient
 import time
 

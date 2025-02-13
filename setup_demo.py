@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 import time
 import threading
 import binascii
@@ -6,7 +10,7 @@ import json
 import os
 
 from client import RelayClient
-from massmarket_hash_event import shop_pb2, shop_events_pb2
+from massmarket import shop_pb2, shop_events_pb2
 
 cid = 11155111
 

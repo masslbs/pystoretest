@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 from typing import Generator, Callable, Tuple, Any, List
 
 import atexit
@@ -32,7 +36,7 @@ atexit.register(print_running_threads)
 @pytest.fixture
 def wc_conn(account_manager) -> RelayClient:
     ta = account_manager.get_test_account()
-    return RelayClient(wallet_account=ta)
+    return RelayClient(name="wc_conn", wallet_account=ta)
 
 
 @pytest.fixture
@@ -45,7 +49,7 @@ def wc_shop(wc_conn: RelayClient) -> RelayClient:
 @pytest.fixture
 def wc_auth(account_manager) -> RelayClient:
     ta = account_manager.get_test_account()
-    conn = RelayClient(wallet_account=ta)
+    conn = RelayClient(name="wc_auth", wallet_account=ta)
     conn.register_shop()
     conn.enroll_key_card()
     conn.login()
@@ -99,8 +103,8 @@ def make_two_clients(
     make_client, cleanup
 ) -> Generator[Tuple[RelayClient, RelayClient], Any, Any]:
     # both alices share the same private wallet but have different keycards
-    a1 = make_client("alice.1")
-    a2 = make_client("alice.2")
+    a1: RelayClient = make_client("alice.1")
+    a2: RelayClient = make_client("alice.2")
     cleanup.append(a1)
     cleanup.append(a2)
     shop_id = a1.register_shop()
@@ -124,15 +128,57 @@ def make_two_clients(
     a1.create_shop_manifest()
     assert a1.errors == 0
     retry = 10
-    while a2.manifest is None:
+    while len(a2.shop.manifest.payees) == 0:
         a2.handle_all()
         assert a2.errors == 0
         retry -= 1
         assert retry > 0, "failed to get manifest"
-    big_token_id = int.from_bytes(a2.manifest.token_id.raw, "big")
+    assert a2.shop is not None
+    big_token_id = a2.shop.manifest.shop_id
     owner_addr = a2.shopReg.functions.ownerOf(big_token_id).call()
     assert owner_addr == a1.account.address
+    assert len(a1.shop.manifest.payees) == 1
+    assert len(a2.shop.manifest.payees) == 1
+    assert a2.shop.manifest.payees == a1.shop.manifest.payees
     yield (a1, a2)
+
+
+@pytest.fixture
+def make_two_guests(
+    make_client: Callable[[str], RelayClient],
+) -> Generator[Tuple[RelayClient, RelayClient, RelayClient], None, None]:
+    # create the owner/clerk
+    charlie: RelayClient = make_client("charlie")
+    shop_id = charlie.register_shop()
+    charlie.enroll_key_card()
+    charlie.login()
+    charlie.create_shop_manifest()
+    assert charlie.errors == 0
+
+    # create two guests
+    guest1: RelayClient = make_client(
+        "guest1", shop=shop_id, guest=True, private_key=os.urandom(32)
+    )
+    guest1.enroll_key_card()
+    guest1.login(subscribe=False)
+    guest1.handle_all()
+    guest1.subscribe_customer()
+    assert guest1.errors == 0
+
+    guest2: RelayClient = make_client(
+        "guest2", shop=shop_id, guest=True, private_key=os.urandom(32)
+    )
+    guest2.enroll_key_card()
+    guest2.login(subscribe=False)
+    guest2.handle_all()
+    guest2.subscribe_customer()
+    assert guest2.errors == 0
+
+    yield (charlie, guest1, guest2)
+
+    charlie.close()
+    guest1.close()
+    guest2.close()
 
 
 class TestAccountManager:

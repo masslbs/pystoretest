@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 import asyncio
 import json
 import requests
