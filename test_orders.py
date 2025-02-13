@@ -118,7 +118,7 @@ default_addr = morder.AddressDetails(
 
 tax_code = mbase.PriceModifier(
     # title="20% tax",
-    modification_percents=new_uint256(120),
+    modification_percent=new_uint256(120),
 )
 
 shipping = mbase.PriceModifier(
