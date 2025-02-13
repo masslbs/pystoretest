@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 import os
 
 from client import RelayClient
@@ -9,7 +13,8 @@ def test_create_shop_manifest(wc_auth: RelayClient):
     wc_auth.close()
 
 
-def test_invite_another_user(wc_auth: RelayClient):
+# TODO: re-enable blockchain account message mirror on the relay
+def skip_test_invite_another_user(wc_auth: RelayClient):
     # owner creates a token for the new clerk
     owner = wc_auth
     reg_secret = owner.create_invite()
@@ -44,6 +49,7 @@ def test_invite_another_user(wc_auth: RelayClient):
     new_clerk.handle_all()
     assert new_clerk.errors == 0
     new_clerk.close()
+    # TODO: re-enable account message mirror on the relay
     assert len(new_clerk.all_key_cards) == 2
     owner.handle_all()
     assert len(owner.all_key_cards) == 2

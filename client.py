@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 # stdlib
 import requests
 import json
@@ -7,34 +11,43 @@ from urllib.parse import urlparse
 from pprint import pprint
 import time
 import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Tuple
 import random
 
 # pip
-import google.protobuf.any_pb2 as anypb
-from sha3 import keccak_256
+import cbor2
+from hashlib import sha256
 from websockets.sync.client import connect
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from web3 import Web3, Account, HTTPProvider
 from web3.middleware import SignAndSendRawMiddlewareBuilder
 from web3.exceptions import TransactionNotFound
-from eth_keys import keys
+from eth_keys.datatypes import PublicKey, PrivateKey
 from eth_account.messages import encode_defunct
 import siwe
 from google.protobuf import timestamp_pb2
 
-# our protobuf schema
-from massmarket_hash_event import (
-    hash_event,
+# our schema
+from massmarket import (
+    cbor_encode,
+    verify_proof,
+    get_root_hash_of_patches,
     error_pb2,
     subscription_pb2,
     transport_pb2,
     authentication_pb2,
     shop_requests_pb2,
-    shop_events_pb2 as mevents,
-    base_types_pb2 as mtypes,
+    base_types_pb2 as pb_base,
 )
-from massmarket_hash_event.envelope_pb2 import Envelope
+from massmarket.envelope_pb2 import Envelope
+
+import massmarket.hamt as hamt
+from massmarket.cbor import Shop
+import massmarket.cbor.patch as mass_patch
+import massmarket.cbor.base_types as mass_base
+import massmarket.cbor.manifest as mass_manifest
+import massmarket.cbor.listing as mass_listing
+import massmarket.cbor.order as mass_order
 
 
 class RelayException(Exception):
@@ -49,12 +62,6 @@ class EnrollException(Exception):
         super().__init__(err)
         self.http_code = http_code
         self.message = err
-
-
-class NamedTag:
-    def __init__(self, name, listings):
-        self.name = name
-        self.listings = listings
 
 
 class PriceTotals:
@@ -76,11 +83,11 @@ class Order:
 
 
 # creates a compound id for inventory checks etc
-def vid(listing_id: int, variations: Optional[List[int]] = None):
+def vid(listing_id: int, variations: Optional[List[str]] = None):
     id = str(listing_id) + ":"
     if variations:
         variations.sort()
-        id = id + ":".join([str(v) for v in variations]) + ":"
+        id = id + ":".join(variations) + ":"
     return id
 
 
@@ -88,26 +95,19 @@ def to_32byte_hex(val):
     return Web3.to_hex(Web3.to_bytes(val).rjust(32, b"\0"))
 
 
-def public_key_to_address(public_key: bytes) -> str:
+def public_key_to_address(pk: bytes | mass_base.PublicKey) -> str:
     """
     Convert a public key to an Ethereum address.
     :param public_key: public key
     :return: Ethereum address
     """
-
-    public_key_parsed = keys.PublicKey(public_key)
-    # address_bytes = keccak()
-    # return Web3.to_checksum_address(address_bytes.hex())
-    return public_key_parsed.to_address()
-
-
-def uint256_to_int(u: mtypes.Uint256) -> int:
-    assert len(u.raw) == 32
-    return int.from_bytes(u.raw, "big")
-
-
-def int_to_uint256(i):
-    return mtypes.Uint256(raw=int(i).to_bytes(32, "big"))
+    if isinstance(pk, bytes):
+        parsed = PublicKey(pk)
+    elif isinstance(pk, mass_base.PublicKey):
+        parsed = PublicKey.from_compressed_bytes(pk.key)
+    else:
+        raise ValueError("Invalid public key type")
+    return parsed.to_address()
 
 
 def now_pbts() -> timestamp_pb2.Timestamp:
@@ -117,9 +117,16 @@ def now_pbts() -> timestamp_pb2.Timestamp:
     return ts
 
 
+def cbor_now():
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
 def new_object_id(i=None):
-    r = random.randbytes(8) if i is None else i.to_bytes(8, "big")
-    return mtypes.ObjectId(raw=r)
+    if i is None:
+        r = random.randbytes(8)
+    else:
+        r = i.to_bytes(8, "big")
+    return int.from_bytes(r, "big")
 
 
 def transact_with_retry(w3, account, contract_call, max_attempts=3):
@@ -173,7 +180,9 @@ def check_transaction(w3, tx, max_retries=10, initial_delay=0.5):
             )
             time.sleep(backoff_time)
 
-    raise TransactionNotFound()
+    raise TransactionNotFound(
+        f"Transaction {tx.hex()} not found after {max_retries} attempts"
+    )
 
 
 def notFoundError(msg):
@@ -191,6 +200,7 @@ def invalidError(msg):
 
 
 class RelayClient:
+    shop: None | Shop = None
 
     def __init__(
         self,
@@ -198,16 +208,41 @@ class RelayClient:
         wallet_account=None,
         wallet_private_key=None,
         key_card_private_key=None,
+        key_card_nonce=1,
         guest=False,
+        relay_http_address=None,
         relay_token_id=None,
         chain_id=None,
         auto_connect=True,
         debug=False,
+        log_file=None,
     ):
         self.name = name
         self.debug = debug
+        self.log_patches = os.getenv("LOG_PATCHES") in ["true", "1", "yes", "on"]
+        current_time = datetime.datetime.now(datetime.UTC)
+        self.start_time = current_time
+        timestamp = current_time.strftime("%H%M%S")
+        self.log_file = log_file or f"{name}_{timestamp}_patches.cbor"
 
-        self.relay_http_address = os.getenv("RELAY_HTTP_ADDRESS")
+        # Initialize patch log entries list
+        self.patch_log_entries = []
+
+        if self.log_patches:
+            # Create header but store in memory
+            header = {
+                "type": "header",
+                "client_name": self.name,
+                "start_time": self.start_time.isoformat(),
+                "version": 1,
+            }
+            self.patch_log_entries.append(header)
+
+        self.relay_http_address = (
+            os.getenv("RELAY_HTTP_ADDRESS")
+            if relay_http_address is None
+            else relay_http_address
+        )
         assert self.relay_http_address is not None, "RELAY_HTTP_ADDRESS is not set"
         print(f"{name} is using relay: {self.relay_http_address}")
         relay_addr = urlparse(self.relay_http_address)
@@ -218,7 +253,7 @@ class RelayClient:
         self.relay_ping = float(relay_ping)
 
         # construct and dial websocket endpoint
-        relay_ws_endpoint = relay_addr._replace(path="/v3/sessions")
+        relay_ws_endpoint = relay_addr._replace(path="/v4/sessions")
         if relay_addr.scheme == "http":
             relay_ws_endpoint = relay_ws_endpoint._replace(scheme="ws")
         elif relay_addr.scheme == "https":
@@ -244,6 +279,8 @@ class RelayClient:
         self.pongs = 0
         self.outgoingRequests = {}
         self.subscription = None
+        self.batching_enabled = False
+        self.patch_buffer = []
         self.errors = 0
         self.expect_error = False
         self.last_error = None
@@ -295,31 +332,55 @@ class RelayClient:
             print(f"new key card: {self.own_key_card}")
         else:
             self.own_key_card = Account.from_key(key_card_private_key)
-        self.last_event_nonce = 1  # TODO persist!
+        self.last_event_nonce = key_card_nonce
         self.valid_addrs = []
         self.all_key_cards = {}
         self.accounts = {}
         self.shop_token_id = 0
         self.last_shop_seq_no = 0
-        self.manifest = None
-        self.default_currency = mtypes.ShopCurrency(
-            address=mtypes.EthereumAddress(raw=bytes(20)),
+        self.default_currency = mass_base.ChainAddress(
             chain_id=self.chain_id,
+            address=bytes(20),
         )
-        self.default_payee = mtypes.Payee(
-            name="default",
-            address=mtypes.EthereumAddress(raw=bytes.fromhex(self.account.address[2:])),
-            chain_id=self.chain_id,
+        self.default_payee = mass_base.Payee(
+            address=mass_base.ChainAddress(
+                chain_id=self.chain_id,
+                address=self.account.address,
+            ),
+            call_as_contract=False,
         )
-        self.listings: Dict[bytes, mevents.Listing] = {}
-        self.inventory: Dict[bytes, int] = {}
-        self.tags: Dict[bytes, NamedTag] = {}
-        self.orders: Dict[bytes, Order] = {}
-        self.currencies: List[mtypes.ShopCurrency] = []
-        self.payees: Dict[str, mtypes.Payee] = {}
-        self.pricing_currency: Optional[mtypes.ShopCurrency] = None
+        self.default_shipping_address = mass_order.AddressDetails(
+            name="Valentin Mustermann",
+            address1="Musterstraße 1",
+            city="Musterstadt",
+            country="DE",
+            postal_code="12345",
+            email_address="valentin@mustermann.de",
+            phone_number="+491234567890",
+        )
+        self.shop = None
 
     def close(self):
+        if self.log_patches and hasattr(self, "start_time") and self.patch_log_entries:
+            # Add a footer entry
+            end_time = datetime.datetime.now(datetime.UTC)
+            duration_ms = int((end_time - self.start_time).total_seconds() * 1000)
+            footer = {
+                "type": "footer",
+                "end_time": end_time.isoformat(),
+                "duration_ms": duration_ms,
+                "patches_count": self.last_shop_seq_no,
+                "errors": self.errors,
+            }
+            self.patch_log_entries.append(footer)
+
+            # Write all entries at once
+            with open(self.log_file, "wb") as f:
+                f.write(cbor_encode(self.patch_log_entries))
+
+            print(f"Wrote {len(self.patch_log_entries)} log entries to {self.log_file}")
+            self.patch_log_entries = []
+
         if self.connection:
             self.connection.close()
             self.connection = None
@@ -327,95 +388,143 @@ class RelayClient:
         self.logged_in = False
         self.last_request_id = 0
         self.errors = 0
+        print(f"closed {self.name}")
 
     def next_request_id(self):
         next = self.last_request_id + 1
-        req_id = mtypes.RequestId(raw=next)
+        req_id = pb_base.RequestId(raw=next)
         self.last_request_id = next
         return req_id
 
+    # TODO: update to shop object
     def print_state(self):
         print("Shop State:")
         print("-----------")
 
+        if self.shop is None:
+            print("No shop data available.")
+            return
+
         print("Currencies:")
-        if len(self.currencies) == 0:
+        if (
+            self.shop.manifest.accepted_currencies is None
+            or len(self.shop.manifest.accepted_currencies) == 0
+        ):
             print(" No currencies set up")
         else:
-            for curr in self.currencies:
-                print(f"  ChainID: {curr.chain_id} Addr: {curr.address.raw.hex()}")
+            for chain_id, addresses in self.shop.manifest.accepted_currencies.items():
+                for addr in addresses:
+                    print(f"  ChainID: {chain_id} Addr: {addr}")
 
-        if self.pricing_currency is None:
+        if self.shop.manifest.pricing_currency is None:
             print(" No base currency!")
         else:
-            b = self.pricing_currency
-            print(
-                f"Base Currency:\n  ChainID: {b.chain_id} Addr: {b.address.raw.hex()}"
-            )
+            b = self.shop.manifest.pricing_currency
+            print(f"Base Currency:\n  ChainID: {b.chain_id} Addr: {b.address}")
 
-        if len(self.payees) == 0:
+        if self.shop.manifest.payees is None or len(self.shop.manifest.payees) == 0:
             print(" No Payees set up ")
         else:
             print("Payees:")
-            for name, p in self.payees.items():
-                print(
-                    f"  {name}: ChainID: {p.chain_id} Addr: {p.address.raw.hex()} (isEndpoint: {p.call_as_contract})"
-                )
+            for chain_id, addresses in self.shop.manifest.payees.items():
+                for addr, metadata in addresses.items():
+                    print(
+                        f"  ChainID: {chain_id} Addr: {addr} (isEndpoint: {metadata.call_as_contract})"
+                    )
 
         print("\nListings:")
-        if not self.listings:
+        if not self.shop.listings or self.shop.listings.size == 0:
             print("  No listings available.")
         else:
-            for listing_id, listing in self.listings.items():
-                display_price = int.from_bytes(listing.price.raw, "big")
+
+            def print_listing(listing_id, listing: mass_listing.Listing):
                 print(f"  Listing ID: {listing_id}")
-                print(f"    Price: {display_price}")
-                # TODO: variations
-                if listing_id in self.inventory:
-                    print(f"    Stock: {self.inventory[listing_id]}")
+                print(f"    Price: {listing.price}")
+                if listing.options is not None:
+                    for option_name, option in listing.options.items():
+                        print(f"    Option: {option_name}")
+                        for variation_name, variation in option.variations.items():
+                            print(f"      Variation: {variation_name}")
+                            print(f"       Modifier: {variation.price_modifier}")
+                if self.shop.inventory and self.shop.inventory.has(listing_id):
+                    quantity = self.shop.inventory.get(listing_id)
+                    if quantity is not None:
+                        print(f"    Stock: {quantity}")
                 else:
                     print("    Stock: Not available")
                 print(f"    Metadata: {listing.metadata}")
+                return True
+
+            self.shop.listings.all(print_listing)
 
         print("\nOrders:")
-        if not self.orders:
+        if not self.shop.orders or self.shop.orders.size == 0:
             print("  No orders available.")
         else:
-            for order_id, order in self.orders.items():
-                if order is None:
-                    print(f"  Order ID: {order_id} (Canceled)")
-                    continue
+
+            def print_order(order_id, order: mass_order.Order):
                 # TODO: use new timestamps
                 print(f"  Order ID: {order_id}")
-                print(f"    Payed: {order.payed}")
-                print(f"    Finalized: {order.finalized}")
-                if order.finalized:
-                    print(f"    Totals:")
-                    print(f"      Total: {order.total}")
-                    print(f"      Payment ID: {order.payment_id}")
-                    print(f"      Payment TTL: {order.payment_ttl}")
-                    print(f"    Items:")
-                    for listing_id, quantity in order.items.items():
-                        print(f"      Listing ID: {listing_id} Quantity: {quantity}")
+                print(f"    State: {order.state}")
+                print(f"    Items:")
+                for item in order.items:
+                    print(
+                        f"    Listing ID: {item.listing_id} Quantity: {item.quantity}"
+                    )
+                if order.payment_details:
+                    print(f"  Totals:")
+                    print(f"    Total: {order.payment_details.total}")
+                    print(f"    Payment ID: {order.payment_details.payment_id}")
+                    print(f"    Payment TTL: {order.payment_details.ttl}")
+                if order.chosen_payee:
+                    print(f"  Chosen Payee:")
+                    print(
+                        f"    Address: {order.chosen_payee.address.address.to_bytes().hex()}"
+                    )
+                    print(f"    Chain ID: {order.chosen_payee.address.chain_id}")
+                    print(f"    Is Endpoint: {order.chosen_payee.call_as_contract}")
+                if order.shipping_address:
+                    print(f"  Shipping Details:")
+                    print(f"    Name: {order.shipping_address.name}")
+                    print(f"    Address: {order.shipping_address.address1}")
+                    print(f"    City: {order.shipping_address.city}")
+                    print(f"    Country: {order.shipping_address.country}")
+                    print(f"    Postal Code: {order.shipping_address.postal_code}")
+                    print(f"    Email: {order.shipping_address.email_address}")
+                    print(f"    Phone: {order.shipping_address.phone_number}")
+                return True
+
+            self.shop.orders.all(print_order)
 
         print("\nTags:")
-        if not self.tags:
+        if not self.shop.tags or self.shop.tags.size == 0:
             print("  No tags available.")
         else:
-            for tag_id, tag in self.tags.items():
+
+            def print_tag(tag_id, tag):
+                if tag is None:
+                    return True
                 print(f"  Tag ID: {tag_id}")
                 print(f"    Name: {tag.name}")
                 for listing_id in tag.listings:
                     print(f"    Listing ID: {listing_id}")
+                return True
+
+            self.shop.tags.all(print_tag)
 
         # Print key cards
         print("\nKey Cards:")
-        if not self.all_key_cards:
+        if not self.shop or not self.shop.accounts or self.shop.accounts.size == 0:
             print("  No key cards available.")
         else:
-            for card_public_key, user_wallet_addr in self.all_key_cards.items():
-                print(f"  Key Card: 0x{card_public_key.hex()}")
-                print(f"    User Wallet Address: {user_wallet_addr.raw.hex()}")
+
+            def print_account(user_wallet, account: mass_base.Account):
+                print(f"  User Wallet: {user_wallet.hex()}:")
+                for keycard in account.keycards:
+                    print(f"     KeyCard: 0x{keycard.key.hex()}")
+                return True
+
+            self.shop.accounts.all(print_account)
 
     def __load_contracts(self):
         contracts_path = os.getenv("MASS_CONTRACTS")
@@ -512,9 +621,9 @@ class RelayClient:
         self.check_tx(tx)
 
     def enroll_key_card(self, siwe_msg=None):
-        keyCard = keys.PrivateKey(self.own_key_card.key)
+        keyCard = PrivateKey(self.own_key_card.key)
 
-        modified_url = self.relay_addr._replace(path="/v3/enroll_key_card")
+        modified_url = self.relay_addr._replace(path="/v4/enroll_key_card")
         if self.is_guest:
             modified_url = modified_url._replace(query="guest=1")
         enroll_url = modified_url.geturl()
@@ -523,9 +632,9 @@ class RelayClient:
             raise Exception("shop_token_id unset")
 
         if siwe_msg is None:
-            kc_hex = keyCard.public_key.to_hex()
+            kc_hex = "0x" + keyCard.public_key.to_compressed_bytes().hex()
 
-            now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00","Z")
+            now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
             siwe_msg = siwe.SiweMessage(
                 domain=self.relay_addr.netloc,
                 address=self.account.address,
@@ -572,8 +681,11 @@ class RelayClient:
 
         if response is None:
             raise Exception("Failed to enroll key card")
-
-        respData = response.json()
+        try:
+            respData = response.json()
+        except json.JSONDecodeError:
+            print(f"Failed to decode response: {response.text}")
+            raise
         if response.status_code != 201 or "error" in respData:
             raise EnrollException(
                 response.status_code, respData.get("error", "Unknown error")
@@ -589,6 +701,7 @@ class RelayClient:
             pass
         except ConnectionClosedError as err:
             self.connected = False
+            self.connection = None
             raise err
         return data
 
@@ -619,7 +732,7 @@ class RelayClient:
         elif type == "sync_status_request":
             self.handle_sync_status_request(msg)
         elif type == "subscription_push_request":
-            self.handle_event_push_request(msg)
+            self.handle_subscription_push_request(msg)
         else:
             err = f"Unknown message type: {type}"
             self.errors += 1
@@ -638,6 +751,7 @@ class RelayClient:
         )
         data = resp.SerializeToString()
         try:
+            assert self.connection is not None
             self.connection.send(data)
         except ConnectionClosedError as err:
             self.connected = False
@@ -649,18 +763,19 @@ class RelayClient:
     def handle_sync_status_request(self, env: Envelope):
         req = env.sync_status_request
         if self.debug:
-            print("SyncStatusRequest: unpushedEvents={}".format(req.unpushed_events))
+            print(f"SyncStatusRequest: unpushedPatches={req.unpushed_patches}")
         resp = Envelope(
             request_id=env.request_id,
             response=Envelope.GenericResponse(),
         )
         data = resp.SerializeToString()
+        assert self.connection is not None
         self.connection.send(data)
 
-    def _check_expected_request(self, req_id: mtypes.RequestId, clean=False):
+    def _check_expected_request(self, req_id: pb_base.RequestId, clean=False):
         ours = req_id.raw
         if ours not in self.outgoingRequests:
-            raise Exception(f"Received reponse for unknown request id={ours}")
+            raise Exception(f"Received response for unknown request id={ours}")
         if clean:
             del self.outgoingRequests[ours]
 
@@ -676,7 +791,7 @@ class RelayClient:
         csr = Envelope(
             request_id=req_id,
             challenge_solution_request=authentication_pb2.ChallengeSolvedRequest(
-                signature=mtypes.Signature(raw=signature),
+                signature=pb_base.Signature(raw=signature),
             ),
         )
         data = csr.SerializeToString()
@@ -718,6 +833,8 @@ class RelayClient:
             else:
                 raise RelayException(resp.error)
         else:
+            if self.expect_error:
+                print(f"{self.name} expected error: {resp}")
             self.outgoingRequests[req_id.raw] = {
                 "new_state_hash": resp.payload,
             }
@@ -765,235 +882,93 @@ class RelayClient:
             assert subscription_id == self.subscription
             self.subscription = None
 
-    def handle_event_push_request(self, msg: Envelope):
+    def handle_subscription_push_request(self, msg: Envelope):
         req = msg.subscription_push_request
         if self.debug:
             print(
-                f"{self.name} EventPushRequest reqID={msg.request_id.raw} events={len(req.events)}"
+                f"{self.name} SubscriptionPushRequest reqID={msg.request_id.raw} sets={len(req.sets)}"
             )
         err = None
         last_seq_no = None
-        for sig_evt in req.events:
-            evt = mevents.ShopEvent()
-            assert sig_evt.event.event.TypeName() == "market.mass.ShopEvent"
-            sig_evt.event.event.Unpack(evt)
-            signed_by = self._verify_event(sig_evt.event)
-            which = evt.WhichOneof("union")
-            if self.debug:
-                print(
-                    f"{self.name}/newEvent shopSeq:{sig_evt.seq_no} nonce:{evt.nonce} kc:{signed_by} type:{which}"
+        # pprint(req)
+
+        # Log received patch sets if enabled
+        if self.log_patches:
+            now = datetime.datetime.now(datetime.UTC)
+            delta_ms = int((now - self.start_time).total_seconds() * 1000)
+
+            for set_idx, set in enumerate(req.sets):
+                # Create a wrapper with metadata
+                patch_log_entry = {
+                    "type": "patch_set",
+                    "timestamp_delta_ms": delta_ms,
+                    "shop_seq_no": set.shop_seq_no,
+                    "header": set.header,
+                    "signature": set.signature,
+                    "patch": [patch for patch in set.patches],
+                    "proofs": [proof for proof in set.proofs],
+                    "set_index": set_idx,
+                    "total_sets": len(req.sets),
+                }
+
+                # Store entry in memory
+                self.patch_log_entries.append(patch_log_entry)
+
+        for set in req.sets:
+            (npatches, nproofs) = len(set.patches), len(set.proofs)
+            if npatches == 0:
+                raise Exception("empty partial set?")
+            if npatches != nproofs:
+                raise Exception(
+                    f"unequal number of patches({npatches}) and proofs({nproofs})"
                 )
-                pprint(evt)
-            last_seq_no = sig_evt.seq_no
-            if which == "manifest":
-                self.manifest = evt.manifest
-                for p in evt.manifest.payees:
-                    self.payees[p.name] = p
-                for add in evt.manifest.accepted_currencies:
-                    self.currencies.append(add)
-                if evt.manifest.pricing_currency:
-                    self.pricing_currency = evt.manifest.pricing_currency
-            elif which == "update_manifest":
-                um = evt.update_manifest
-                for add in um.add_accepted_currencies:
-                    self.currencies.append(add)
-                for rm in um.remove_accepted_currencies:
-                    self.currencies.remove(rm)
-                if um.HasField("add_payee"):
-                    p = um.add_payee
-                    self.payees[p.name] = p
-                if um.HasField("set_pricing_currency"):
-                    self.pricing_currency = um.set_pricing_currency
-            elif which == "listing":
-                ci = evt.listing
-                self.listings[ci.id.raw] = ci
-            elif which == "update_listing":
-                ui = evt.update_listing
-                if ui.id.raw not in self.listings:
-                    err = notFoundError(f"unknown listing: {ui.id}")
-                else:
-                    listing = self.listings[ui.id.raw]
-                    if ui.HasField("price"):
-                        listing.price.CopyFrom(ui.price)
-                    if ui.HasField("view_state"):
-                        listing.view_state = ui.view_state
-                    if ui.HasField("metadata"):
-                        # more partial updates :S
-                        if ui.metadata.title:
-                            listing.metadata.title = ui.metadata.title
-                        if ui.metadata.images:
-                            listing.metadata.ClearField("images")
-                            listing.metadata.images.MergeFrom(ui.metadata.images)
-                    for opt in ui.add_options:
-                        # check if option id already exists
-                        for existing in listing.options:
-                            if existing.id == opt.id:
-                                err = invalidError(f"option already exists: {opt.id}")
-                        listing.options.append(opt)
-                    for id in ui.remove_option_ids:
-                        found = False
-                        for opt in listing.options:
-                            if opt.id == id:
-                                listing.options.remove(opt)
-                                found = True
-                                break
-                        if not found:
-                            err = notFoundError(f"unknown option to remove: {id}")
-                    for av in ui.add_variations:
-                        found = False
-                        for opt in listing.options:
-                            if opt.id == av.option_id:
-                                opt.variations.append(av.variation)
-                                found = True
-                                break
-                        if not found:
-                            err = notFoundError(
-                                f"unknown option to add variation to: {av.option_id}"
-                            )
-                    for id in ui.remove_variation_ids:
-                        found = False
-                        for opt in listing.options:
-                            for v in opt.variations:
-                                if v.id == id:
-                                    opt.variations.remove(v)
-                                    found = True
-                                    break
-                        if not found:
-                            err = notFoundError(f"unknown variation to remove: {id}")
-                    self.listings[ui.id.raw] = listing
-            elif which == "tag":
-                ct = evt.tag
-                if ct.id.raw in self.tags:
-                    err = invalidError(f"tag already exists: {ct.id}")
-                else:
-                    self.tags[ct.id.raw] = NamedTag(ct.name, [])
-            elif which == "update_tag":
-                ut = evt.update_tag
-                tid = ut.id.raw
-                if tid not in self.tags:
-                    err = notFoundError(f"unknown tag: {tid}")
-                else:
-                    for id in ut.add_listing_ids:
-                        aid = id.raw
-                        if aid not in self.listings:
-                            err = notFoundError(f"unknown listing: {aid}")
-                        else:
-                            self.tags[tid].listings.append(aid)
 
-                    for id in ut.remove_listing_ids:
-                        rid = id.raw
-                        if rid not in self.listings:
-                            err = notFoundError(f"unknown listing: {rid}")
-                        else:
-                            self.tags[tid].listings.remove(rid)
-                    if ut.HasField("rename"):
-                        self.tags[tid].name = ut.rename
-                    if ut.HasField("delete"):
-                        del self.tags[tid]
-            elif which == "change_inventory":
-                cs = evt.change_inventory
-                if cs.id.raw not in self.listings:
-                    err = notFoundError(f"unknown listing: {cs.id}")
-                else:
-                    lookup_id = vid(cs.id, cs.variation_ids)
-                    self.inventory[lookup_id] = (
-                        self.inventory.get(lookup_id, 0) + cs.diff
-                    )
-            elif which == "create_order":
-                cc = evt.create_order
-                if cc.id.raw in self.orders:
-                    err = invalidError(f"order already exists: {cc.id}")
-                else:
-                    self.orders[cc.id.raw] = Order(cc.id)
-            elif which == "update_order":
-                uo = evt.update_order
-                oid = uo.id.raw
-                if oid not in self.orders:
-                    err = notFoundError(f"unknown order: {oid}")
-                order = self.orders[oid]
+            header = mass_patch.PatchSetHeader.from_cbor(set.header)
 
-                action = uo.WhichOneof("action")
+            signed_by = self._verify_signature(set.header, set.signature)
+
+            for i, patch_data in enumerate(set.patches):
+
+                # TODO: move to verify_proof helper
+                [leaf_index, size, proof_path] = cbor2.loads(set.proofs[i])
+                if proof_path is None:
+                    proof_path = []
+
+                # TODO: move hashing into verify_proof helper
+                hashed_patch = sha256(patch_data).digest()
+                verify_proof(leaf_index, hashed_patch, proof_path, header.root_hash)
+                # print("proof & signature verified.")
+
+                # apply patch to local state
+                patch = mass_patch.Patch.from_cbor(patch_data)
+
+                obj_type = patch.path.type
                 if self.debug:
-                    print(f"{self.name} updating order {oid} with action {action}")
-                if action == "change_items":
-                    ci = uo.change_items
-                    # TODO: variations
-                    for ai in ci.adds:
-                        aid = ai.listing_id.raw
-                        if aid not in self.listings:
-                            err = notFoundError(f"unknown listing: {aid}")
-                        else:
-                            if aid not in order.items:
-                                order.items[aid] = 0
-                                order.items[aid] += ai.quantity
-                                self.orders[oid] = order
-                    for ri in ci.removes:
-                        rid = ri.listing_id.raw
-                        if rid not in self.listings:
-                            err = notFoundError(f"unknown listing: {rid}")
-                        else:
-                            if rid not in order.items:
-                                order.items[rid] = 0
-                                order.items[rid] -= ri.quantity
-                                self.orders[oid] = order
-                elif action == "commit_items":
-                    order.state = "committed"
-                    self.orders[oid] = order
-                elif action == "set_payment_details":
-                    cf = uo.set_payment_details
-                    if self.debug:
-                        print(f"Order payment details:\n{cf}")
-                    order.finalized = True
-                    order.listing_hashes = cf.listing_hashes
-                    order.total = int.from_bytes(cf.total.raw, byteorder="big")
-                    order.payment_id = int.from_bytes(
-                        cf.payment_id.raw, byteorder="big"
+                    print(
+                        f"{self.name}/newEvent shopSeq:{set.shop_seq_no} nonce:{header.key_card_nonce} kc:{signed_by} type:{obj_type}"
                     )
-                    order.payment_ttl = int(cf.ttl)
-                    order.chosen_region = cf.shipping_region
-                    order.state = "unpayed"
-                    self.orders[oid] = order
-                elif action == "cancel":
-                    ca = uo.cancel
-                    self.orders[oid].state = "canceled"
-                elif action == "add_payment_tx":
-                    order.state = "payed"
-                    # TODO: track block hash etc?
-                    self.orders[oid] = order
-
-            elif which == "account":
-                acc = evt.account
-                action = acc.WhichOneof("action")
-                if action == "add":
-                    addr = acc.add.account_address.raw.hex()
-                    self.accounts[addr] = acc.add
-                    if self.debug:
-                        print(f"{self.name} onchain add of {addr}")
-                elif action == "remove":
-                    addr = acc.remove.account_address.raw.hex()
-                    del self.accounts[addr]
-                    if self.debug:
-                        print(f"{self.name} onchain remove of {addr}")
-                elif action == "enroll_keycard":
-                    nkc = acc.enroll_keycard
-                    if nkc.keycard_pubkey.raw in self.all_key_cards:
-                        err = invalidError(
-                            f"key card already exists: {nkc.keycard_pubkey.raw.hex()}"
-                        )
-                    else:
-                        if self.debug:
-                            print(
-                                f"{self.name} adding keyCard=0x{nkc.keycard_pubkey.raw.hex()} for user={nkc.user_wallet.raw.hex()}"
-                            )
-                        self.all_key_cards[nkc.keycard_pubkey.raw] = nkc.user_wallet
-                        self.valid_addrs.append(
-                            public_key_to_address(nkc.keycard_pubkey.raw).lower()
-                        )
+                    pprint(patch)
+                last_seq_no = set.shop_seq_no
+                if obj_type == mass_patch.ObjectType.MANIFEST:
+                    err = self._patch_manifest(patch)
+                elif obj_type == mass_patch.ObjectType.ACCOUNT:
+                    err = self._patch_account(patch)
+                elif obj_type == mass_patch.ObjectType.LISTING:
+                    err = self._patch_listing(patch)
+                elif obj_type == mass_patch.ObjectType.TAG:
+                    err = self._patch_tag(patch)
+                elif obj_type == mass_patch.ObjectType.INVENTORY:
+                    err = self._patch_inventory(patch)
+                elif obj_type == mass_patch.ObjectType.ORDER:
+                    err = self._patch_order(patch)
                 else:
-                    err = invalidError(f"unhandled acount.action type: {action}")
-
-            else:
-                err = invalidError(f"unhandled event type: {which}")
+                    err = invalidError(f"unhandled object type: {obj_type}")
+                if err is not None:
+                    break
+                if self.debug:
+                    print(
+                        f"{self.name} patched {patch.path.type}: {patch.op} {patch.path.fields}"
+                    )
         resp = Envelope(
             request_id=msg.request_id,
             response=Envelope.GenericResponse(error=err),
@@ -1008,6 +983,598 @@ class RelayClient:
         # Update the last processed seq_no
         if last_seq_no is not None:
             self.last_shop_seq_no = max(self.last_shop_seq_no, last_seq_no)
+
+    def _patch_manifest(self, patch: mass_patch.Patch):
+        if patch.op == mass_patch.OpString.REPLACE:
+            if len(patch.path.fields) == 0:
+                manifest = mass_manifest.Manifest.from_cbor_dict(patch.value)
+                if self.shop is None:
+                    self.shop = Shop(
+                        schema_version=4,
+                        manifest=manifest,
+                        accounts=(
+                            self.accountsHamt
+                            if hasattr(self, "accountsHamt")
+                            else hamt.Trie.new()
+                        ),
+                        listings=hamt.Trie.new(),
+                        tags=hamt.Trie.new(),
+                        orders=hamt.Trie.new(),
+                        inventory=hamt.Trie.new(),
+                    )
+                else:
+                    self.shop.manifest = manifest
+                if self.debug:
+                    print(f"{self.name} manifest replaced: {self.shop.manifest}")
+            elif patch.path.fields[0] == "PricingCurrency":
+                if self.shop is None:
+                    return invalidError("shop not initialized")
+                self.shop.manifest.pricing_currency = patch.value
+            elif patch.path.fields[0] == "AcceptedCurrencies":
+                if self.shop is None:
+                    return invalidError("shop not initialized")
+                chain_id = int(patch.path.fields[1])
+                addr = mass_base.EthereumAddress(patch.path.fields[2])
+                assert isinstance(chain_id, int)
+                assert isinstance(addr, mass_base.EthereumAddress)
+                if (
+                    chain_id in self.shop.manifest.accepted_currencies
+                    and addr in self.shop.manifest.accepted_currencies[chain_id]
+                ):
+                    return invalidError(
+                        f"currency already exists: {chain_id}/{addr.hex()}"
+                    )
+                self.shop.manifest.accepted_currencies[chain_id].add(addr)
+            else:
+                return invalidError(
+                    f"unhandled manifest patch fields: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.ADD:
+            assert self.shop is not None
+            if len(patch.path.fields) == 0:
+                return invalidError("wont handle empty add patch")
+            elif patch.path.fields[0] == "Payees":
+                chain_id = int(patch.path.fields[1])
+                addr = mass_base.EthereumAddress(patch.path.fields[2])
+                assert isinstance(chain_id, int)
+                assert isinstance(addr, mass_base.EthereumAddress)
+                meta = mass_base.PayeeMetadata.from_cbor_dict(patch.value)
+                self.shop.manifest.payees[chain_id][addr] = meta
+            elif patch.path.fields[0] == "AcceptedCurrencies":
+                chain_id = int(patch.path.fields[1])
+                addr = mass_base.EthereumAddress(patch.path.fields[2])
+                assert isinstance(chain_id, int)
+                assert isinstance(addr, mass_base.EthereumAddress)
+                if chain_id in self.shop.manifest.accepted_currencies:
+                    if addr in self.shop.manifest.accepted_currencies[chain_id]:
+                        return invalidError(
+                            f"currency already exists: {chain_id}/{addr.hex()}"
+                        )
+                if chain_id not in self.shop.manifest.accepted_currencies:
+                    self.shop.manifest.accepted_currencies[chain_id] = set()
+                self.shop.manifest.accepted_currencies[chain_id].add(addr)
+            elif patch.path.fields[0] == "ShippingRegions":
+                if self.shop.manifest.shipping_regions is None:
+                    self.shop.manifest.shipping_regions = {}
+                name = patch.path.fields[1]
+                if not isinstance(name, str):
+                    return invalidError(f"invalid shipping region: {name}")
+                region = mass_manifest.ShippingRegion.from_cbor_dict(patch.value)
+                self.shop.manifest.shipping_regions[name] = region
+            else:
+                return invalidError(f"unhandled manifest field: {patch.path.fields}")
+        elif patch.op == mass_patch.OpString.REMOVE:
+            assert self.shop is not None
+            if len(patch.path.fields) == 0:
+                return invalidError("wont handle empty remove patch")
+            elif patch.path.fields[0] == "Payees":
+                chain_id = int(patch.path.fields[1])
+                addr = mass_base.EthereumAddress(patch.path.fields[2])
+                assert isinstance(chain_id, int)
+                assert isinstance(addr, mass_base.EthereumAddress)
+                if chain_id not in self.shop.manifest.payees:
+                    return notFoundError(f"unknown payee: {chain_id}")
+                if addr not in self.shop.manifest.payees[chain_id]:
+                    return notFoundError(f"unknown payee: {addr}")
+                del self.shop.manifest.payees[chain_id][addr]
+            elif patch.path.fields[0] == "AcceptedCurrencies":
+                chain_id = int(patch.path.fields[1])
+                addr = mass_base.EthereumAddress(patch.path.fields[2])
+                assert isinstance(chain_id, int)
+                assert isinstance(addr, mass_base.EthereumAddress)
+                if chain_id not in self.shop.manifest.accepted_currencies:
+                    return notFoundError(f"unknown currency: {chain_id}")
+                self.shop.manifest.accepted_currencies[chain_id].remove(addr)
+            elif patch.path.fields[0] == "ShippingRegions":
+                name = patch.path.fields[1]
+                if self.shop.manifest.shipping_regions is None:
+                    return notFoundError(f"no shipping regions defined")
+                if not isinstance(name, str):
+                    return invalidError(f"invalid name: {name}")
+                if name not in self.shop.manifest.shipping_regions:
+                    return notFoundError(f"unknown shipping region: {name}")
+                del self.shop.manifest.shipping_regions[name]
+            else:
+                return invalidError(f"unhandled manifest field: {patch.path.fields}")
+        else:
+            return invalidError(f"unhandled manifest patch op: {patch.op}")
+
+    def _patch_account(self, patch: mass_patch.Patch):
+        if self.shop is None:
+            self.accountsHamt = hamt.Trie.new()
+            self.shop = Shop(
+                schema_version=4,
+                manifest=mass_manifest.Manifest(
+                    shop_id=self.shop_token_id,
+                    payees={},
+                    accepted_currencies=[self.default_currency],
+                    pricing_currency=self.default_currency,
+                ),
+                accounts=self.accountsHamt,
+            )
+        if isinstance(patch.path.account_addr, mass_base.EthereumAddress):
+            user_wallet = patch.path.account_addr.to_bytes()
+        elif isinstance(patch.path.account_addr, bytes):
+            user_wallet = patch.path.account_addr
+        else:
+            return invalidError(
+                f"account address is required: {type(patch.path.account_addr)}"
+            )
+        if patch.op == mass_patch.OpString.ADD:
+            # pprint(patch)
+            if len(patch.path.fields) == 0:
+                account = mass_base.Account.from_cbor_dict(patch.value)
+                self.accounts[user_wallet] = account
+                self.shop.accounts.insert(user_wallet, account)
+                if self.debug:
+                    print(f"{self.name} account add of {user_wallet.hex()}")
+                for kc in account.keycards:
+                    if kc in self.all_key_cards:
+                        return invalidError(f"key card already exists: {kc.key.hex()}")
+                    else:
+                        if self.debug:
+                            print(
+                                f"{self.name} adding keyCard=0x{kc.key.hex()} for user={user_wallet.hex()}"
+                            )
+                        self.all_key_cards[kc] = user_wallet
+                        self.valid_addrs.append(public_key_to_address(kc).lower())
+            elif len(patch.path.fields) == 2 and patch.path.fields[0] == "KeyCards":
+                if not self.shop.accounts.has(user_wallet):
+                    return notFoundError(f"unknown account: {user_wallet.hex()}")
+                account = self.shop.accounts.get(user_wallet)
+                keycard = mass_base.PublicKey.from_cbor_dict(patch.value)
+
+                if keycard in self.all_key_cards:
+                    return invalidError(f"key card already exists: {keycard.key.hex()}")
+
+                try:
+                    index = patch.path.fields[1]
+                    if index < 0 or index > len(account.keycards):
+                        return invalidError(f"index out of bounds: {index}")
+                    account.keycards.insert(index, keycard)
+                except ValueError:
+                    return invalidError(
+                        f"invalid KeyCards index: {patch.path.fields[1]}"
+                    )
+
+                self.accounts[user_wallet] = account
+                self.shop.accounts.insert(user_wallet, account)
+
+                if self.debug:
+                    print(
+                        f"{self.name} adding keyCard=0x{keycard.key.hex()} for user={user_wallet.hex()}"
+                    )
+                self.all_key_cards[keycard] = user_wallet
+                self.valid_addrs.append(public_key_to_address(keycard).lower())
+            else:
+                return invalidError(
+                    f"unhandled accounts patch path: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.APPEND:
+            if len(patch.path.fields) == 1 and patch.path.fields[0] == "KeyCards":
+                if not self.shop.accounts.has(user_wallet):
+                    return notFoundError(f"unknown account: {user_wallet.hex()}")
+                account = self.shop.accounts.get(user_wallet)
+                keycard = mass_base.PublicKey.from_cbor_dict(patch.value)
+
+                if keycard in self.all_key_cards:
+                    return invalidError(f"key card already exists: {keycard.key.hex()}")
+
+                account.keycards.append(keycard)
+                self.accounts[user_wallet] = account
+                self.shop.accounts.insert(user_wallet, account)
+
+                if self.debug:
+                    print(
+                        f"{self.name} adding keyCard=0x{keycard.key.hex()} for user={user_wallet.hex()}"
+                    )
+                self.all_key_cards[keycard] = user_wallet
+                self.valid_addrs.append(public_key_to_address(keycard).lower())
+            else:
+                return invalidError(
+                    f"unhandled accounts append patch path: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.REMOVE:
+            if not self.shop.accounts.has(user_wallet):
+                return notFoundError(f"unknown account: {user_wallet.hex()}")
+            # Remove all keycards for this user first
+            for kc, addr in list(self.all_key_cards.items()):
+                if addr == user_wallet:
+                    del self.all_key_cards[kc]
+                    self.valid_addrs.remove(public_key_to_address(kc).lower())
+            # Then remove the account
+            del self.accounts[user_wallet]
+            self.shop.accounts.delete(user_wallet)
+            if self.debug:
+                print(f"{self.name} onchain remove of {user_wallet.hex()}")
+        else:
+            return invalidError(f"unhandled patch.op type: {patch.op}")
+
+    def _patch_listing(self, patch: mass_patch.Patch):
+        listing_id = patch.path.object_id
+        assert isinstance(listing_id, int)
+        assert self.shop is not None
+        if patch.op == mass_patch.OpString.ADD:
+            l = self.shop.listings.get(listing_id)
+            if patch.path.fields == []:
+                if l is not None:
+                    return invalidError(f"listing already exists: {listing_id}")
+                else:
+                    listing = mass_listing.Listing.from_cbor_dict(patch.value)
+                    self.shop.listings.insert(listing.id, listing)
+            elif len(patch.path.fields) == 2 and patch.path.fields[0] == "Options":
+                opt_name = patch.path.fields[1]
+                if l is None:
+                    return notFoundError(f"unknown listing: {listing_id}")
+                if l.options is None:
+                    l.options = {}
+                if opt_name in l.options:
+                    return invalidError(f"option already exists: {opt_name}")
+                l.options[opt_name] = mass_listing.ListingOption.from_cbor_dict(
+                    patch.value
+                )
+                self.shop.listings.insert(listing_id, l)
+            elif (
+                len(patch.path.fields) == 4
+                and patch.path.fields[0] == "Options"
+                and patch.path.fields[2] == "Variations"
+            ):
+                opt_name = patch.path.fields[1]
+                var_name = patch.path.fields[3]
+                if l is None:
+                    return notFoundError(f"unknown listing: {listing_id}")
+                if l.options is None or opt_name not in l.options:
+                    return notFoundError(f"unknown option: {opt_name}")
+                curr_vars = l.options[opt_name].variations
+                if curr_vars is not None and var_name in curr_vars:
+                    return invalidError(f"variation already exists: {var_name}")
+                l.options[opt_name].variations[var_name] = (
+                    mass_listing.ListingVariation.from_cbor_dict(patch.value)
+                )
+                self.shop.listings.insert(listing_id, l)
+            else:
+                return invalidError(
+                    f"unhandled add patch.path.fields for listing: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.APPEND:
+            if patch.path.fields == ["Metadata", "Images"]:
+                l = self.shop.listings.get(listing_id)
+                if l is None:
+                    return notFoundError(f"unknown listing: {listing_id}")
+                assert l.metadata.images is not None
+                l.metadata.images.append(patch.value)
+                self.shop.listings.insert(listing_id, l)
+            else:
+                return invalidError(
+                    f"unhandled append patch.path.fields for listing: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.REPLACE:
+            l = self.shop.listings.get(listing_id)
+            if l is None:
+                return notFoundError(f"unknown listing: {listing_id}")
+            if patch.path.fields == ["Price"]:
+                if not isinstance(patch.value, int):
+                    return invalidError(f"invalid price: {patch.value}")
+                l.price = mass_base.Uint256(patch.value)
+            elif patch.path.fields == ["ViewState"]:
+                if not isinstance(patch.value, int):
+                    return invalidError(f"invalid viewState: {patch.value}")
+                l.view_state = mass_listing.ListingViewState(patch.value)
+            elif patch.path.fields == ["Metadata"]:
+                if not isinstance(patch.value, dict):
+                    return invalidError(f"invalid metadata: {patch.value}")
+                l.metadata = mass_listing.ListingMetadata.from_cbor_dict(patch.value)
+            elif patch.path.fields == ["Metadata", "Title"]:
+                if not isinstance(patch.value, str):
+                    return invalidError(f"invalid title: {patch.value}")
+                l.metadata.title = patch.value
+            elif patch.path.fields == ["Metadata", "Description"]:
+                if not isinstance(patch.value, str):
+                    return invalidError(f"invalid description: {patch.value}")
+                l.metadata.description = patch.value
+            # TODO: replace image by index
+            else:
+                return invalidError(
+                    f"unhandled replace patch.path.fields for listing: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.REMOVE:
+            if patch.path.fields == []:
+                l = self.shop.listings.get(listing_id)
+                if l is None:
+                    return notFoundError(f"unknown listing: {listing_id}")
+                self.shop.listings.delete(listing_id)
+            elif len(patch.path.fields) == 3 and patch.path.fields[0] == "Metadata":
+                if patch.path.fields[1] == "Images":
+                    index = int(patch.path.fields[2])
+                    if not isinstance(index, int):
+                        return invalidError(f"invalid image index: {index}")
+                    l = self.shop.listings.get(listing_id)
+                    if l is None:
+                        return notFoundError(f"unknown listing: {listing_id}")
+                    assert l.metadata.images is not None
+                    if index < 0 or index >= len(l.metadata.images):
+                        return invalidError(f"invalid image index: {index}")
+                    del l.metadata.images[index]
+                    self.shop.listings.insert(listing_id, l)
+            elif len(patch.path.fields) == 2 and patch.path.fields[0] == "Options":
+                opt_name = patch.path.fields[1]
+                l = self.shop.listings.get(listing_id)
+                if l is None:
+                    return notFoundError(f"unknown listing: {listing_id}")
+                assert l.options is not None
+                if opt_name in l.options:
+                    del l.options[opt_name]
+                self.shop.listings.insert(listing_id, l)
+            elif (
+                len(patch.path.fields) == 4
+                and patch.path.fields[0] == "Options"
+                and patch.path.fields[2] == "Variations"
+            ):
+                opt_name = patch.path.fields[1]
+                var_name = patch.path.fields[3]
+                l = self.shop.listings.get(listing_id)
+                if l is None:
+                    return notFoundError(f"unknown listing: {listing_id}")
+                assert l.options is not None
+                assert opt_name in l.options
+                if l.options[opt_name] is None:
+                    return notFoundError(f"unknown option: {opt_name}")
+                curr_vars = l.options[opt_name].variations
+                if curr_vars is None or var_name not in curr_vars:
+                    return notFoundError(f"unknown variation: {var_name}")
+                del curr_vars[var_name]
+                self.shop.listings.insert(listing_id, l)
+            else:
+                return invalidError(
+                    f"unhandled remove patch.path.fields for listing: {patch.path.fields}"
+                )
+        else:
+            return invalidError(f"unhandled patch.op for listing: {patch.op}")
+
+    def _patch_tag(self, patch: mass_patch.Patch):
+        assert self.shop is not None, "shop not initialized"
+        tag_name = patch.path.tag_name
+        assert tag_name is not None, "tag name is required"
+        if patch.op == mass_patch.OpString.ADD:
+            if patch.path.fields == []:
+                tag = mass_base.Tag.from_cbor_dict(patch.value)
+                if self.shop.tags.has(tag_name):
+                    return invalidError(f"tag already exists: {tag_name}")
+                else:
+                    self.shop.tags.insert(tag_name, tag)
+            else:
+                return invalidError(
+                    f"unhandled add patch.path.fields for tag: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.APPEND:
+            if patch.path.fields == ["ListingIDs"]:
+                tag = self.shop.tags.get(tag_name)
+                if tag is None:
+                    return notFoundError(f"unknown tag: {tag_name}")
+                else:
+                    tag.listings.append(patch.value)
+                    self.shop.tags.insert(tag_name, tag)
+            else:
+                return invalidError(
+                    f"unhandled append patch.path.fields for tag: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.REMOVE:
+            if patch.path.fields == []:
+                if not self.shop.tags.has(tag_name):
+                    return notFoundError(f"unknown tag: {tag_name}")
+                else:
+                    self.shop.tags.delete(tag_name)
+            elif len(patch.path.fields) == 2 and patch.path.fields[0] == "ListingIDs":
+                index = int(patch.path.fields[1])
+                if not isinstance(index, int):
+                    return invalidError(f"invalid index: {index}")
+                else:
+                    tag = self.shop.tags.get(tag_name)
+                    if tag is None:
+                        return notFoundError(f"unknown tag: {tag_name}")
+                    else:
+                        tag.listings.pop(index)
+                        self.shop.tags.insert(tag_name, tag)
+            else:
+                return invalidError(
+                    f"unhandled remove patch.path.fields for tag: {patch.path.fields}"
+                )
+        else:
+            return invalidError(f"unhandled patch.op for tag: {patch.op}")
+
+    def _patch_inventory(self, patch: mass_patch.Patch):
+        assert self.shop is not None, "shop not initialized"
+        assert isinstance(patch.value, int)
+        listing_id = patch.path.object_id
+        assert isinstance(listing_id, int)
+        lookup_id = vid(listing_id, patch.path.fields)
+        if patch.op == mass_patch.OpString.ADD:
+            if not self.shop.listings.has(listing_id):
+                return notFoundError(f"unknown listing: {listing_id}")
+            current = self.shop.inventory.get(lookup_id)
+            if current is None:
+                current = 0
+            self.shop.inventory.insert(lookup_id, current + patch.value)
+        elif patch.op == mass_patch.OpString.REMOVE:
+            if not self.shop.inventory.has(lookup_id):
+                return notFoundError(f"unknown inventory: {lookup_id}")
+            self.shop.inventory.delete(lookup_id)
+        elif patch.op == mass_patch.OpString.REPLACE:
+            if not self.shop.inventory.has(lookup_id):
+                return notFoundError(f"unknown inventory: {lookup_id}")
+            self.shop.inventory.insert(lookup_id, patch.value)
+        elif patch.op == mass_patch.OpString.INCREMENT:
+            current = self.shop.inventory.get(lookup_id)
+            if current is None:
+                current = 0
+            self.shop.inventory.insert(lookup_id, current + patch.value)
+        elif patch.op == mass_patch.OpString.DECREMENT:
+            if not self.shop.inventory.has(lookup_id):
+                return notFoundError(f"unknown inventory: {lookup_id}")
+            current = self.shop.inventory.get(lookup_id)
+            if current is None or current < patch.value:
+                return invalidError(f"inventory underflow: {lookup_id}")
+            self.shop.inventory.insert(lookup_id, current - patch.value)
+        else:
+            return invalidError(f"unhandled patch.op for inventory: {patch.op}")
+
+    def _patch_order(self, patch: mass_patch.Patch):
+        assert self.shop is not None, "shop not initialized"
+        order_id = patch.path.object_id
+        assert isinstance(order_id, int)
+        if patch.op == mass_patch.OpString.ADD:
+            if len(patch.path.fields) == 0:
+                # Check if order already exists before insertion
+                if self.shop.orders.has(order_id):
+                    return invalidError(f"order already exists: {order_id}")
+                # Create a new order
+                order = mass_order.Order.from_cbor_dict(patch.value)
+                self.shop.orders.insert(order_id, order)
+                return None
+
+            order = self.shop.orders.get(order_id)
+            if order is None:
+                return notFoundError(f"unknown order: {order_id}")
+
+            if patch.path.fields[0] == "InvoiceAddress":
+                assert order.invoice_address is None
+                order.invoice_address = mass_order.AddressDetails.from_cbor_dict(
+                    patch.value
+                )
+            elif patch.path.fields[0] == "ShippingAddress":
+                assert order.shipping_address is None
+                order.shipping_address = mass_order.AddressDetails.from_cbor_dict(
+                    patch.value
+                )
+            elif patch.path.fields[0] == "PaymentDetails":
+                assert order.payment_details is None
+                order.payment_details = mass_order.PaymentDetails.from_cbor_dict(
+                    patch.value
+                )
+            elif patch.path.fields[0] == "TxDetails":
+                assert order.tx_details is None
+                order.tx_details = mass_order.OrderPaid.from_cbor_dict(patch.value)
+            elif patch.path.fields[0] == "ChosenPayee":
+                assert order.chosen_payee is None
+                order.chosen_payee = mass_order.Payee.from_cbor_dict(patch.value)
+            elif patch.path.fields[0] == "CanceledAt":
+                assert order.canceled_at is None
+                order.canceled_at = patch.value
+            else:
+                return invalidError(
+                    f"unhandled add patch.path.fields for order: {patch.path.fields}"
+                )
+            self.shop.orders.insert(order_id, order)
+        elif patch.op == mass_patch.OpString.APPEND:
+            order = self.shop.orders.get(order_id)
+            if order is None:
+                return notFoundError(f"unknown order: {order_id}")
+
+            if patch.path.fields[0] == "Items":
+                # Add item to order
+                item = mass_order.OrderedItem.from_cbor_dict(patch.value)
+                order.items.append(item)
+                self.shop.orders.insert(order_id, order)
+            else:
+                return invalidError(
+                    f"unhandled append patch.path.fields for order: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.REPLACE:
+            if not self.shop.orders.has(order_id):
+                return notFoundError(f"unknown order: {order_id}")
+            order = self.shop.orders.get(order_id)
+            assert len(patch.path.fields) > 0
+            if order is None:
+                return notFoundError(f"unknown order: {order_id}")
+            if patch.path.fields[0] == "State":
+                order.state = patch.value
+            elif patch.path.fields[0] == "Items":
+                if not isinstance(patch.value, list):
+                    return invalidError(f"invalid items: {patch.value}")
+                print(patch.value)
+                order.items = [
+                    mass_order.OrderedItem.from_cbor_dict(item) for item in patch.value
+                ]
+            elif patch.path.fields[0] == "InvoiceAddress":
+                order.invoice_address = patch.value
+            elif patch.path.fields[0] == "ShippingAddress":
+                order.shipping_address = patch.value
+            elif patch.path.fields[0] == "ChosenCurrency":
+                order.chosen_currency = patch.value
+            elif patch.path.fields[0] == "ChosenPayee":
+                order.chosen_payee = patch.value
+            elif patch.path.fields[0] == "CanceledAt":
+                order.canceled_at = patch.value
+            elif patch.path.fields[0] == "PaymentDetails":
+                order.payment_details = mass_order.PaymentDetails.from_cbor_dict(
+                    patch.value
+                )
+            elif patch.path.fields[0] == "TxDetails":
+                order.tx_details = mass_order.OrderPaid.from_cbor_dict(patch.value)
+            else:
+                return invalidError(
+                    f"unhandled replace patch.path.fields for order: {patch.path.fields}"
+                )
+            self.shop.orders.insert(order_id, order)
+        elif patch.op == mass_patch.OpString.DECREMENT:
+            if not self.shop.orders.has(order_id):
+                return notFoundError(f"unknown order: {order_id}")
+            order = self.shop.orders.get(order_id)
+            if order is None:
+                return notFoundError(f"unknown order: {order_id}")
+            if (
+                len(patch.path.fields) == 3
+                and patch.path.fields[0] == "Items"
+                and patch.path.fields[2] == "Quantity"
+            ):
+                # Decrement item quantity
+                try:
+                    index = int(patch.path.fields[1])
+                    if index >= len(order.items):
+                        return notFoundError(f"item index out of range: {index}")
+
+                    item = order.items[index]
+                    if item.quantity < patch.value:
+                        return invalidError(
+                            f"item quantity underflow: {item.quantity} < {patch.value}"
+                        )
+
+                    item.quantity -= patch.value
+                    if item.quantity == 0:
+                        order.items.pop(index)
+                    self.shop.orders.insert(order_id, order)
+                except ValueError:
+                    return invalidError(f"invalid item index: {patch.path.fields[1]}")
+            else:
+                return invalidError(
+                    f"unhandled decrement patch.path.fields for order: {patch.path.fields}"
+                )
+        elif patch.op == mass_patch.OpString.REMOVE:
+            if not self.shop.orders.has(order_id):
+                return notFoundError(f"unknown order: {order_id}")
+            self.shop.orders.delete(order_id)
+        else:
+            return invalidError(f"unhandled patch.op for order: {patch.op}")
 
     def connect(self):
         if not self.connected:
@@ -1035,11 +1602,11 @@ class RelayClient:
                         raise e
 
     def authenticate(self):
-        kc = keys.PrivateKey(self.own_key_card.key)
+        kc = PrivateKey(self.own_key_card.key)
         # print('public key: ' + kc.public_key.to_hex())
         req_id = self.next_request_id()
         ar = authentication_pb2.AuthenticateRequest(
-            public_key=mtypes.PublicKey(raw=kc.public_key.to_bytes()),
+            public_key=pb_base.PublicKey(raw=kc.public_key.to_compressed_bytes()),
         )
         msg = Envelope(
             request_id=req_id,
@@ -1050,6 +1617,7 @@ class RelayClient:
             "waiting": True,
             "handler": self.handle_authenticate_response,
         }
+        assert self.connection is not None, "connection not initialized"
         self.connection.send(data)
         timeout = 10
         while req_id.raw in self.outgoingRequests:
@@ -1081,6 +1649,7 @@ class RelayClient:
             get_blob_upload_url_request=ewr,
         )
         data = msg.SerializeToString()
+        assert self.connection is not None, "connection not initialized"
         self.connection.send(data)
         self.outgoingRequests[req_id.raw] = {
             "handler": self.handle_get_blob_upload_url_response,
@@ -1088,52 +1657,15 @@ class RelayClient:
         }
         return req_id.raw
 
-    def _assert_shop_against_response(self, req_id: mtypes.RequestId):
+    def _assert_shop_against_response(self, req_id: pb_base.RequestId):
+        assert self.shop is not None, "shop not initialized"
+        assert req_id is not None, "no request id"
         got_hash = self.outgoingRequests[req_id.raw]["new_state_hash"]
-        has_hash = self._hash_shop()
-        assert got_hash == has_hash, f"shop hash mismatch: {got_hash} != {has_hash}"
+        has_hash = self.shop.hash()
+        assert (
+            got_hash == has_hash
+        ), f"shop hash mismatch: {got_hash.hex()} != {has_hash.hex()}"
         return got_hash
-
-    def _hash_shop(self):
-        return b"todo" * 8  # TODO: merklization spec
-        if self.manifest is None:
-            return os.urandom(32)
-        manifest_hash = keccak_256()
-        # pprint(self.manifest)
-        manifest_hash.update(self.manifest.shop_token_id)
-        manifest_hash.update(self.manifest.domain.encode("utf-8"))
-        manifest_hash.update(self.manifest.published_tag_id)
-        # print("manifest: {}".format(manifest_hash.hexdigest()))
-
-        pub_tag_hash = keccak_256()
-        pub_tag = self.tags[self.manifest.published_tag_id]
-        # sort by itemId
-        pub_tag_ids = []
-        for item_id in pub_tag.items:
-            pub_tag_ids.append(item_id)
-        pub_tag_ids.sort()
-        for item_id in pub_tag_ids:
-            pub_tag_hash.update(item_id)
-        # print("publish_tag: {}".format(pub_tag_hash.hexdigest()))
-
-        stock_hash = keccak_256()
-        stock_ids = []
-        for id in self.inventory:
-            stock_ids.append(id)
-        stock_ids.sort()
-        for id in stock_ids:
-            count = self.inventory[id]
-            if count is None:
-                raise Exception("not in stock?!")
-            stock_hash.update(id)
-            stock_hash.update(str(count).encode("utf-8"))
-        # print("stock: {}".format(stock_hash.hexdigest()))
-
-        root_hash = keccak_256()
-        root_hash.update(manifest_hash.digest())
-        root_hash.update(pub_tag_hash.digest())
-        root_hash.update(stock_hash.digest())
-        return root_hash.digest()
 
     def subscribe_all(self):
         all = [
@@ -1170,13 +1702,13 @@ class RelayClient:
                 object_id=id,
             )
         ]
-        self.subscribe(f)
+        return self.subscribe(f)
 
     def subscribe(self, filters):
         req_id = self.next_request_id()
         req = subscription_pb2.SubscriptionRequest(
             start_shop_seq_no=self.last_shop_seq_no,
-            shop_id=mtypes.Uint256(raw=self.shop_token_id.to_bytes(32, "big")),
+            shop_id=pb_base.Uint256(raw=self.shop_token_id.to_bytes(32, "big")),
             filters=filters,
         )
         msg = Envelope(
@@ -1184,6 +1716,7 @@ class RelayClient:
             subscription_request=req,
         )
         data = msg.SerializeToString()
+        assert self.connection is not None
         self.connection.send(data)
         self.outgoingRequests[req_id.raw] = {
             "waiting": True,
@@ -1214,6 +1747,7 @@ class RelayClient:
             subscription_cancel_request=req,
         )
         data = msg.SerializeToString()
+        assert self.connection is not None
         self.connection.send(data)
         self.outgoingRequests[req_id.raw] = {
             "waiting": True,
@@ -1225,12 +1759,14 @@ class RelayClient:
             print(f"{self.name} subscription cancel waiting")
             self.handle_all()
 
-    def _sign_event(self, evt: mevents.ShopEvent):
-        encoded_data = hash_event(evt)
+    def _sign_header(self, header: mass_patch.PatchSetHeader):
         keyCardPK = Account.from_key(self.own_key_card.key)
-        signed_message = keyCardPK.sign_message(encoded_data)
+        encoded_header = cbor_encode(header.to_cbor_dict())
+        # print(f"DEBUG encoded_header: {encoded_header.hex()}")
+        eip191_data = encode_defunct(encoded_header)
+        signed_message = keyCardPK.sign_message(eip191_data)
         # print(f"hash: {signed_message.messageHash.hex()}")
-        return signed_message
+        return signed_message.signature
 
     # an actual implementation would probably cache the relays
     def _valid_event_signing_addresses(self):
@@ -1238,13 +1774,13 @@ class RelayClient:
             return self.valid_addrs
         else:
             all = []
-            # retreive all relays nfts
+            # retrieve all relays nfts
             if self.shopReg.functions.getRelayCount(self.shop_token_id).call() > 0:
                 all_relay_token_ids = self.shopReg.functions.getAllRelays(
                     self.shop_token_id
                 ).call()
                 for token_id in all_relay_token_ids:
-                    # retreive the owner => it's address
+                    # retrieve the owner => it's address
                     relay_address = self.relayReg.functions.ownerOf(token_id).call()
                     all.append(relay_address.lower())
 
@@ -1257,86 +1793,115 @@ class RelayClient:
             self.valid_addrs = all
             return all
 
-    def _verify_event(self, evt: transport_pb2.SignedEvent):
-        sig = evt.signature.raw
-        if len(sig) != 65:
-            raise Exception(f"Invalid signature length: {len(sig)}")
-        encoded_data = encode_defunct(evt.event.value)
-        pub_key = self.w3.eth.account.recover_message(encoded_data, signature=sig)
+    def _verify_signature(self, header_data: bytes, signature: bytes):
+        if len(signature) != 65:
+            raise Exception(f"Invalid signature length: {len(signature)}")
+        encoded_data = encode_defunct(header_data)
+        pub_key = self.w3.eth.account.recover_message(encoded_data, signature=signature)
         # print(f"{self.name} received event from recovered pub_key: {pub_key}")
         their_addr = Web3.to_checksum_address(pub_key).lower()
         valid_addrs = self._valid_event_signing_addresses()
         if their_addr not in valid_addrs:
             print(f"valid addresses: {valid_addrs}")
-            raise Exception("Event signed by unknown address: {}".format(their_addr))
+            raise Exception(f"Event signed by unknown address: {their_addr}")
         return their_addr
 
-    def _write_event(self, **kwargs):
-        sig_evt = self._create_event(**kwargs)
+    def _write_patch(self, **kwargs):
+        assert len(kwargs) >= 3
+        assert "type" in kwargs
+        assert "op" in kwargs
+        patch = self._create_patch(**kwargs)
+
+        # If batching is enabled, buffer the patch
+        if self.batching_enabled:
+            print(f"{self.name} buffering patch no: {len(self.patch_buffer)}")
+            self.patch_buffer.append(patch)
+            return None
+
+        # Otherwise, create a patch set with a single patch and send it
+        sig_pset = self._create_patch_set([patch])
+
         # default wait to yes
         wait = kwargs.get("wait")
         wait = True if wait is None else wait
-        return self._send_event(sig_evt, wait)
+        return self._send_signed_patch(sig_pset, wait)
 
-    def _create_event(
-        self,
-        manifest: Optional[mevents.Manifest] = None,
-        update_manifest: Optional[mevents.UpdateManifest] = None,
-        listing: Optional[mevents.Listing] = None,
-        update_listing: Optional[mevents.UpdateListing] = None,
-        change_inventory: Optional[mevents.ChangeInventory] = None,
-        tag: Optional[mevents.Tag] = None,
-        update_tag: Optional[mevents.UpdateTag] = None,
-        create_order: Optional[mevents.CreateOrder] = None,
-        update_order: Optional[mevents.UpdateOrder] = None,
-        wait: bool = True,
-    ):
-        shop_evt = mevents.ShopEvent(
-            nonce=self.last_event_nonce,
-            shop_id=mtypes.Uint256(raw=self.shop_token_id.to_bytes(32, "big")),
-            timestamp=now_pbts(),
+    def _create_patch(self, **kwargs):
+        # convert object to cbor dict if possible
+        obj = kwargs.get("obj", None)
+        if obj is not None and hasattr(obj, "to_cbor_dict"):
+            obj = obj.to_cbor_dict()
+
+        # construct path from kwargs
+        path = mass_patch.PatchPath(
+            type=mass_patch.ObjectType(kwargs["type"]),
+            object_id=kwargs.get("object_id", None),
+            tag_name=kwargs.get("tag_name", None),
+            account_addr=kwargs.get("account_addr", None),
+            fields=kwargs.get("fields", None),
+        )
+
+        # create patch for object
+        return mass_patch.Patch(
+            path=path,
+            op=kwargs["op"],
+            value=obj,
+        )
+
+    def _create_patch_set(self, patches):
+        # create header
+        header = mass_patch.PatchSetHeader(
+            key_card_nonce=self.last_event_nonce,
+            shop_id=mass_base.Uint256(self.shop_token_id),
+            timestamp=cbor_now(),
+            root_hash=get_root_hash_of_patches(patches),
         )
         self.last_event_nonce += 1
-        # TODO: kwargs?
-        if manifest:
-            shop_evt.manifest.CopyFrom(manifest)
-        elif update_manifest:
-            shop_evt.update_manifest.CopyFrom(update_manifest)
-        elif listing:
-            shop_evt.listing.CopyFrom(listing)
-        elif update_listing:
-            shop_evt.update_listing.CopyFrom(update_listing)
-        elif change_inventory:
-            shop_evt.change_inventory.CopyFrom(change_inventory)
-        elif tag:
-            shop_evt.tag.CopyFrom(tag)
-        elif update_tag:
-            shop_evt.update_tag.CopyFrom(update_tag)
-        elif create_order:
-            shop_evt.create_order.CopyFrom(create_order)
-        elif update_order:
-            shop_evt.update_order.CopyFrom(update_order)
-        else:
-            raise Exception("unhandled event type")
-        # TODO: deubg flag
+
+        # TODO: debug flag
         # print(f"{self.name} writes:")
         # pprint(shop_evt)
-        msg = self._sign_event(shop_evt)
-        wrapped = anypb.Any()
-        wrapped.Pack(shop_evt)
-        sig_evt = transport_pb2.SignedEvent(
-            event=wrapped,
-            signature=mtypes.Signature(raw=msg.signature),
+
+        signature = self._sign_header(header)
+
+        return mass_patch.SignedPatchSet(
+            header=header,
+            signature=signature,
+            patches=patches,
         )
-        return sig_evt
+
+    def toggle_batching(self):
+        self.batching_enabled = not self.batching_enabled
+
+    # Start buffering patches instead of sending them immediately
+    def start_batch(self):
+        assert not self.batching_enabled
+        self.batching_enabled = True
+        self.patch_buffer.clear()
+
+    # Send all buffered patches as a single patch set
+    def flush_batch(self, wait=True):
+        if len(self.patch_buffer) == 0:
+            print(f"{self.name} no patches to flush")
+            return None
+
+        patches = self.patch_buffer.copy()
+        self.patch_buffer.clear()
+        self.batching_enabled = False
+
+        sig_pset = self._create_patch_set(patches)
+        return self._send_signed_patch(sig_pset, wait)
 
     # wait controls whether to wait for a response to the request
-    def _send_event(self, sig_evt: transport_pb2.SignedEvent, wait: bool = True):
+    def _send_signed_patch(
+        self, sig_pset: mass_patch.SignedPatchSet, wait: bool = True
+    ):
         req_id = self.next_request_id()
-        ewr = transport_pb2.EventWriteRequest(events=[sig_evt])
+        cbor_bytes = cbor_encode(sig_pset.to_cbor_dict())
+        wr = transport_pb2.PatchSetWriteRequest(patch_set=cbor_bytes)
         msg = Envelope(
             request_id=req_id,
-            event_write_request=ewr,
+            patch_set_write_request=wr,
         )
         data = msg.SerializeToString()
         assert self.connection is not None
@@ -1353,262 +1918,550 @@ class RelayClient:
         return req_id
 
     def create_shop_manifest(self):
-        if not self.expect_error:
-            assert self.manifest == None
-        sm = mevents.Manifest(
-            token_id=mtypes.Uint256(raw=self.shop_token_id.to_bytes(32, "big")),
-            accepted_currencies=[self.default_currency],
+        # TODO: batching cleanup
+        # if not self.expect_error:
+        #     assert self.shop is None
+        sm = mass_manifest.Manifest(
+            shop_id=mass_base.Uint256(self.shop_token_id),
+            accepted_currencies={
+                self.default_currency.chain_id: {
+                    self.default_currency.address,
+                },
+            },
             pricing_currency=self.default_currency,
-            payees=[self.default_payee],
-            shipping_regions=[
-                mtypes.ShippingRegion(
-                    name="all",
+            payees={
+                self.default_payee.address.chain_id: {
+                    self.default_payee.address.address: mass_base.PayeeMetadata(
+                        call_as_contract=False
+                    )
+                },
+            },
+            shipping_regions={
+                "default": mass_base.ShippingRegion(
                     country="",
-                ),
-            ],
+                    postal_code="",
+                    city="",
+                )
+            },
         )
-        self._write_event(manifest=sm)
+        self._write_patch(
+            obj=sm,
+            type=mass_patch.ObjectType.MANIFEST,
+            op="replace",
+        )
 
     def update_shop_manifest(
         self,
-        add_currencies=[],
-        remove_currencies=[],
-        set_pricing_currency=None,
-        remove_payee=None,
-        add_payee=None,
-        add_regions=[],
-        remove_regions=[],
+        add_currency: Optional[mass_base.ChainAddress] = None,
+        remove_currency: Optional[mass_base.ChainAddress] = None,
+        set_pricing_currency: Optional[mass_base.ChainAddress] = None,
+        add_payee: Optional[mass_base.Payee] = None,
+        remove_payee: Optional[mass_base.Payee] = None,
+        add_region: Optional[Tuple[str, mass_base.ShippingRegion]] = None,
+        remove_region: Optional[str] = None,
+        wait: bool = True,
     ):
-        um = mevents.UpdateManifest()
-        for c in add_currencies:
-            um.add_accepted_currencies.append(c)
-        for c in remove_currencies:
-            um.remove_accepted_currencies.append(c)
-        if set_pricing_currency:
-            um.set_pricing_currency.CopyFrom(set_pricing_currency)
-        if add_payee:
-            um.add_payee.CopyFrom(add_payee)
-        if remove_payee:
-            um.remove_payee.CopyFrom(remove_payee)
-        for r in add_regions:
-            um.add_shipping_regions.append(r)
-        for r in remove_regions:
-            um.remove_shipping_regions.append(r)
-        self._write_event(update_manifest=um)
+        obj = None
+        fields = None
+        op = None
+        assert self.shop is not None, "shop not initialized"
+        if add_currency:
+            op = mass_patch.OpString.ADD
+            fields = [
+                "AcceptedCurrencies",
+                add_currency.chain_id,
+                add_currency.address.to_bytes(),
+            ]
+            obj = {}
+        elif remove_currency is not None:
+            op = mass_patch.OpString.REMOVE
+            assert isinstance(remove_currency, mass_base.ChainAddress)
+            fields = [
+                "AcceptedCurrencies",
+                remove_currency.chain_id,
+                remove_currency.address.to_bytes(),
+            ]
+            obj = None
+        elif set_pricing_currency:
+            op = mass_patch.OpString.REPLACE
+            fields = ["PricingCurrency"]
+            obj = set_pricing_currency
+            assert isinstance(obj, mass_base.ChainAddress)
+        elif add_payee:
+            op = mass_patch.OpString.ADD
+            assert isinstance(add_payee, mass_base.Payee)
+            fields = [
+                "Payees",
+                add_payee.address.chain_id,
+                add_payee.address.address.to_bytes(),
+            ]
+            obj = mass_base.PayeeMetadata(call_as_contract=add_payee.call_as_contract)
+        elif remove_payee is not None:
+            op = mass_patch.OpString.REMOVE
+            assert isinstance(remove_payee, mass_base.Payee)
+            fields = [
+                "Payees",
+                remove_payee.address.chain_id,
+                remove_payee.address.address.to_bytes(),
+            ]
+            obj = None
+        elif add_region:
+            op = mass_patch.OpString.ADD
+            name = add_region[0]
+            fields = ["ShippingRegions", name]
+            obj = add_region[1]
+            assert isinstance(obj, mass_base.ShippingRegion)
+        elif remove_region is not None:
+            op = mass_patch.OpString.REMOVE
+            assert isinstance(remove_region, str)
+            fields = ["ShippingRegions", remove_region]
+            obj = None
+        else:
+            raise Exception("no fields to update")
+        self._write_patch(
+            type=mass_patch.ObjectType.MANIFEST,
+            obj=obj,
+            op=op,
+            fields=fields,
+            wait=wait,
+        )
 
-    def create_listing(self, name: str, price: int, iid=None, wait=True):
+    def create_listing(
+        self,
+        name: str,
+        price: int,
+        iid=None,
+        wait=True,
+        state=mass_listing.ListingViewState.PUBLISHED,
+    ):
         if iid is None:
             iid = new_object_id()
-        if iid.raw in self.listings:
+        if self.shop is None and not self.expect_error:
+            raise Exception("shop not initialized")
+        if self.shop is not None and self.shop.listings.has(iid):
             raise Exception(f"Listing already exists: {iid}")
-        meta = mtypes.ListingMetadata(
+        meta = mass_listing.ListingMetadata(
             title=name,
             description="This is a description of the listing",
             images=["https://example.com/image.png"],
         )
-        listing = mevents.Listing(
+        listing = mass_listing.Listing(
             id=iid,
             metadata=meta,
-            price=int_to_uint256(price),
+            price=mass_base.Uint256(price),
+            view_state=state,
         )
-        self._write_event(listing=listing)
+        self._write_patch(
+            obj=listing,
+            object_id=iid,
+            type=mass_patch.ObjectType.LISTING,
+            op=mass_patch.OpString.ADD,
+            wait=wait,
+        )
         if wait and not self.expect_error:
             i = 10
-            while iid.raw not in self.listings:
+            while not self.shop.listings.has(iid):
                 self.handle_all()
                 i -= 1
-                assert i > 0, "create listing timeout"
+                assert i > 0, f"create listing {iid} timeout"
         return iid
 
     def update_listing(
         self,
-        listing_id,
-        price: Optional[mtypes.Uint256] = None,
+        listing_id: int,
+        price: Optional[int | mass_base.Uint256] = None,
         title: Optional[str] = None,
         descr: Optional[str] = None,
         add_image: Optional[str] = None,
-        state: Optional[mtypes.ListingViewState] = None,
-        add_option: Optional[mtypes.ListingOption] = None,
-        add_variation: Optional[mevents.UpdateListing.AddVariation] = None,
-        remove_variation: Optional[mtypes.ObjectId] = None,
-        remove_option: Optional[mtypes.ObjectId] = None,
+        remove_image: Optional[int] = None,
+        state: Optional[mass_listing.ListingViewState] = None,
+        add_option: Optional[Tuple[str, mass_listing.ListingOption]] = None,
+        remove_option: Optional[str] = None,
+        add_variation: Optional[
+            Tuple[str, Tuple[str, mass_listing.ListingVariation]]
+        ] = None,
+        remove_variation: Optional[Tuple[str, str]] = None,
     ):
+        op = None
+        obj = None
+        fields = None
+        assert self.shop is not None, "shop not initialized"
         if not self.expect_error:
-            assert listing_id.raw in self.listings, f"unknown listing: {listing_id}"
-        update = mevents.UpdateListing(id=listing_id)
-        if title:
-            update.metadata.title = title
-        if descr:
-            update.metadata.description = descr
-        if add_image:
-            existing = self.listings[listing_id.raw]
-            existing = existing.metadata.images if existing.metadata.images else []
-            existing.append(add_image)
-            update.metadata.images.extend(existing)
+            assert self.shop.listings.has(listing_id), f"unknown listing: {listing_id}"
         if price:
-            update.price.CopyFrom(price)
-        if state:
-            update.view_state = state
-        if add_option:
-            update.add_options.append(add_option)
-        if add_variation:
-            update.add_variations.append(add_variation)
-        if remove_variation:
-            update.remove_variation_ids.append(remove_variation)
-        if remove_option:
-            update.remove_option_ids.append(remove_option)
-        req_id = self._write_event(update_listing=update)
-        return req_id
+            op = mass_patch.OpString.REPLACE
+            fields = ["Price"]
+            assert isinstance(price, int) or isinstance(price, mass_base.Uint256)
+            obj = price
+        elif title:
+            op = mass_patch.OpString.REPLACE
+            fields = ["Metadata", "Title"]
+            assert isinstance(title, str)
+            obj = title
+        elif descr:
+            op = mass_patch.OpString.REPLACE
+            fields = ["Metadata", "Description"]
+            assert isinstance(descr, str)
+            obj = descr
+        elif add_image:
+            op = mass_patch.OpString.APPEND
+            fields = ["Metadata", "Images"]
+            assert isinstance(add_image, str)
+            obj = add_image
+        elif remove_image is not None:
+            op = mass_patch.OpString.REMOVE
+            fields = ["Metadata", "Images", remove_image]
+            assert isinstance(remove_image, int)
+            obj = None
+        elif state:
+            op = mass_patch.OpString.REPLACE
+            fields = ["ViewState"]
+            assert isinstance(state, mass_listing.ListingViewState)
+            obj = state
+        elif add_option:
+            op = mass_patch.OpString.ADD
+            assert isinstance(add_option, tuple) and len(add_option) == 2
+            opt_name = add_option[0]
+            assert isinstance(opt_name, str)
+            obj = add_option[1]
+            assert isinstance(obj, mass_listing.ListingOption)
+            fields = ["Options", opt_name]
+        elif remove_option:
+            op = mass_patch.OpString.REMOVE
+            fields = ["Options", remove_option]
+            assert isinstance(remove_option, str)
+            obj = None
+        elif add_variation:
+            op = mass_patch.OpString.ADD
+            assert isinstance(add_variation, tuple) and len(add_variation) == 2
+            opt_name = add_variation[0]
+            assert isinstance(opt_name, str)
+            new_var = add_variation[1]
+            assert isinstance(new_var, tuple) and len(new_var) == 2
+            var_name = new_var[0]
+            assert isinstance(var_name, str)
+            obj = new_var[1]
+            assert isinstance(obj, mass_listing.ListingVariation)
+            fields = ["Options", opt_name, "Variations", var_name]
+        elif remove_variation:
+            op = mass_patch.OpString.REMOVE
+            assert isinstance(remove_variation, tuple) and len(remove_variation) == 2
+            opt_name = remove_variation[0]
+            assert isinstance(opt_name, str)
+            var_name = remove_variation[1]
+            assert isinstance(var_name, str)
+            fields = ["Options", opt_name, "Variations", var_name]
+            obj = None
+        else:
+            raise Exception("no fields to update")
+        assert fields is not None, "no fields to update"
+        assert op is not None, "no op to update"
+        return self._write_patch(
+            type=mass_patch.ObjectType.LISTING,
+            object_id=listing_id,
+            obj=obj,
+            op=op,
+            fields=fields,
+        )
 
-    def create_tag(self, name, tag_id=None):
-        tid = tag_id
-        if tid is None:
-            tid = new_object_id()
-        if tid.raw in self.tags:
-            raise Exception("Tag already exists: {}".format(tid))
-        tag = mevents.Tag(id=tid, name=name)
-        self._write_event(tag=tag)
-        return tid
+    def create_tag(self, name):
+        if not self.expect_error:
+            assert self.shop is not None, "shop not initialized"
+        if self.shop is not None and self.shop.tags.has(name):
+            raise Exception(f"Tag already exists: {name}")
+        tag = mass_base.Tag(name=name, listings=[])
+        self._write_patch(
+            type=mass_patch.ObjectType.TAG,
+            tag_name=name,
+            obj=tag,
+            op=mass_patch.OpString.ADD,
+        )
 
-    def add_to_tag(self, tag_id, listing_id):
-        if not self.expect_error and tag_id.raw not in self.tags:
-            raise Exception("Unknown tag: {}".format(tag_id))
-        if not self.expect_error and listing_id.raw not in self.listings:
-            raise Exception("Unknown listing: {}".format(listing_id))
-        add = mevents.UpdateTag(id=tag_id, add_listing_ids=[listing_id])
-        self._write_event(update_tag=add)
+    def add_to_tag(self, tag_name, listing_id):
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.tags.has(tag_name):
+            raise Exception(f"Unknown tag: {tag_name}")
+        if not self.expect_error and not self.shop.listings.has(listing_id):
+            raise Exception(f"Unknown listing: {listing_id}")
+        if not isinstance(listing_id, int):
+            raise Exception("Listing ID must be an integer")
+        self._write_patch(
+            type=mass_patch.ObjectType.TAG,
+            tag_name=tag_name,
+            fields=["ListingIDs"],
+            op=mass_patch.OpString.APPEND,
+            obj=listing_id,
+        )
 
-    def remove_from_tag(self, tag_id, listing_id):
-        if not self.expect_error and tag_id.raw not in self.tags:
-            raise Exception("Unknown tag: {}".format(tag_id))
-        if not self.expect_error and listing_id.raw not in self.listings:
-            raise Exception("Unknown listing: {}".format(listing_id))
-        remove = mevents.UpdateTag(id=tag_id, remove_listing_ids=[listing_id])
-        self._write_event(update_tag=remove)
+    def remove_from_tag(self, tag_name, listing_id):
+        assert self.shop is not None, "shop not initialized"
+        tag = self.shop.tags.get(tag_name)
+        if not self.expect_error and tag is None:
+            raise Exception(f"Unknown tag: {tag_name}")
+        if not self.expect_error and not self.shop.listings.has(listing_id):
+            raise Exception(f"Unknown listing: {listing_id}")
+        assert tag is not None, f"Unknown tag: {tag_name}"
+        # Find the index of the listing ID in the tag's listings array
+        try:
+            index = tag.listings.index(listing_id)
+        except ValueError:
+            raise Exception(f"Listing {listing_id} not found in tag {tag_name}")
+        except AttributeError:
+            if self.expect_error:
+                index = 0
+            else:
+                raise Exception(f"Tag {tag_name} has no listings")
 
-    def rename_tag(self, tag_id, name):
-        if not self.expect_error and tag_id.raw not in self.tags:
-            raise Exception("Unknown tag: {}".format(tag_id))
-        rename = mevents.UpdateTag(id=tag_id, rename=name)
-        self._write_event(update_tag=rename)
+        self._write_patch(
+            type=mass_patch.ObjectType.TAG,
+            tag_name=tag_name,
+            fields=["ListingIDs", index],
+            op=mass_patch.OpString.REMOVE,
+        )
 
-    def delete_tag(self, tag_id):
-        if not self.expect_error and tag_id.raw not in self.tags:
-            raise Exception("Unknown tag: {}".format(tag_id))
-        delete = mevents.UpdateTag(id=tag_id, delete=True)
-        self._write_event(update_tag=delete)
+    # TODO: figure out semantics
+    # def rename_tag(self, tag_name, new_name):
+    #     if not self.expect_error and not self.tags.has(tag_name):
+    #         raise Exception(f"Unknown tag: {tag_name}")
+    #     self._write_patch(
+    #         type=mass_patch.ObjectType.TAG,
+    #         tag_name=tag_name,
+    #         fields=["Name"],
+    #         op=mass_patch.OpString.REPLACE,
+    #         obj=new_name,
+    #   )
+
+    def delete_tag(self, tag_name):
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.tags.has(tag_name):
+            raise Exception(f"Unknown tag: {tag_name}")
+        self._write_patch(
+            type=mass_patch.ObjectType.TAG,
+            tag_name=tag_name,
+            op=mass_patch.OpString.REMOVE,
+        )
+
+    def change_inventory(
+        self, listing_id: int, change: int, variations: Optional[List[str]] = None
+    ):
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.listings.has(listing_id):
+            raise Exception(f"Unknown listing: {listing_id}")
+
+        op = mass_patch.OpString.ADD
+        lookup_id = vid(listing_id, variations)
+        current = self.shop.inventory.get(lookup_id)
+        if current is None:
+            current = 0
+            op = mass_patch.OpString.ADD
+        if not self.expect_error and current + change < 0:
+            raise Exception(
+                f"Inventory underflow: {lookup_id} {current} + {change} < 0"
+            )
+        if change == 0:
+            op = mass_patch.OpString.REPLACE
+        elif change > 0:
+            op = mass_patch.OpString.INCREMENT
+        else:
+            change = -change
+            op = mass_patch.OpString.DECREMENT
+        self._write_patch(
+            type=mass_patch.ObjectType.INVENTORY,
+            object_id=listing_id,
+            op=op,
+            obj=change,
+            fields=variations,
+        )
+
+    def check_inventory(self, listing_id: int, variations: Optional[List[str]] = None):
+        assert self.shop is not None, "shop not initialized"
+        lookup_id = vid(listing_id, variations)
+        current = self.shop.inventory.get(lookup_id)
+        if current is None:
+            return 0
+        else:
+            return current
 
     def create_order(self, oid=None, wait=True):
+        if not self.expect_error:
+            assert self.shop is not None, "shop not initialized"
         if oid is None:
             oid = new_object_id()
-        if not self.expect_error and oid.raw in self.orders:
-            raise Exception("Order already exists: {}".format(oid))
-        order = mevents.CreateOrder(id=oid)
-        self._write_event(create_order=order)
+        if not self.expect_error and self.shop.orders.has(oid):
+            raise Exception(f"Order already exists: {oid}")
+        order = mass_order.Order(id=oid, items=[], state=mass_order.OrderState.OPEN)
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=oid,
+            obj=order,
+            op=mass_patch.OpString.ADD,
+            wait=wait,
+        )
+
         if wait and not self.expect_error:
             i = 10
-            while oid.raw not in self.orders:
+            while not self.shop.orders.has(oid):
                 self.handle_all()
                 i -= 1
                 assert i > 0, "create order timeout"
         return oid
 
     def add_to_order(self, order_id, listing_id, quantity, variations=None):
-        if not self.expect_error and order_id.raw not in self.orders:
-            raise Exception("Unknown order: {}".format(order_id))
-        if not self.expect_error and listing_id.raw not in self.listings:
-            raise Exception("Unknown listing: {}".format(listing_id))
-        update = mevents.UpdateOrder(
-            id=order_id,
-            change_items=mevents.UpdateOrder.ChangeItems(
-                adds=[
-                    mtypes.OrderedItem(
-                        listing_id=listing_id,
-                        quantity=quantity,
-                        variation_ids=variations,
-                    )
-                ],
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+        if not self.expect_error and not self.shop.listings.has(listing_id):
+            raise Exception(f"Unknown listing: {listing_id}")
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.APPEND,
+            obj=mass_order.OrderedItem(
+                listing_id=listing_id,
+                quantity=quantity,
+                variation_ids=variations,
             ),
+            fields=["Items"],
         )
-        self._write_event(update_order=update)
 
-    def remove_from_order(self, order_id, listing_id, quantity):
-        order = Order(None)
-        if not self.expect_error and order_id.raw not in self.orders:
-            raise Exception("Unknown order: {}".format(order_id))
-        if not self.expect_error:
-            order = self.orders[order_id.raw]
-        if not self.expect_error and (
-            listing_id.raw not in self.listings or listing_id.raw not in order.items
-        ):
-            raise Exception("Unknown listing: {}".format(listing_id))
-        update = mevents.UpdateOrder(
-            id=order_id,
-            change_items=mevents.UpdateOrder.ChangeItems(
-                removes=[
-                    mtypes.OrderedItem(
-                        listing_id=listing_id,
-                        quantity=quantity,
-                    )
-                ],
-            ),
+    def remove_from_order(self, order_id, listing_id, quantity, variations=None):
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+        if not self.expect_error and not self.shop.listings.has(listing_id):
+            raise Exception(f"Unknown listing: {listing_id}")
+
+        order = self.shop.orders.get(order_id)
+        if order is None:
+            raise Exception(f"Unknown order: {order_id}")
+
+        index = None
+        for i, item in enumerate(order.items):
+            if item.listing_id == listing_id and item.variation_ids == variations:
+                index = i
+                break
+
+        if index is None:
+            raise Exception(f"Listing {listing_id} not found in order {order_id}")
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.DECREMENT,
+            obj=quantity,
+            fields=["Items", index, "Quantity"],
         )
-        self._write_event(update_order=update)
 
     def abandon_order(self, order_id):
-        utcnow = datetime.datetime.utcnow()
-        now = timestamp_pb2.Timestamp()
-        now.FromDatetime(utcnow)
-        ca = mevents.UpdateOrder(
-            id=order_id,
-            cancel=mevents.UpdateOrder.Cancel(),
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+
+        # Start batch to combine these operations
+        was_batching = self.batching_enabled
+        if not was_batching:
+            self.start_batch()
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.ADD,
+            fields=["CanceledAt"],
+            obj=cbor_now(),
         )
-        self._write_event(update_order=ca)
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["State"],
+            obj=mass_order.OrderState.CANCELED,
+        )
+
+        if not was_batching:
+            self.flush_batch()
 
     def update_address_for_order(self, order_id, invoice=None, shipping=None):
-        uo = mevents.UpdateOrder(id=order_id)
-        if invoice:
-            uo.set_invoice_address.CopyFrom(invoice)
-        elif shipping:
-            uo.set_shipping_address.CopyFrom(shipping)
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+        if invoice is None and shipping is None:
+            raise Exception("invoice and shipping cannot both be None")
+        field_name = "InvoiceAddress" if invoice else "ShippingAddress"
+        address_obj = invoice if invoice else shipping
+
+        # check if order already has an address
+        order = self.shop.orders.get(order_id)
+        if order is not None:
+            if order.invoice_address is not None and field_name == "InvoiceAddress":
+                op = mass_patch.OpString.REPLACE
+            elif order.shipping_address is not None and field_name == "ShippingAddress":
+                op = mass_patch.OpString.REPLACE
+            else:
+                op = mass_patch.OpString.ADD
         else:
-            raise Exception("Need to set invoice or shipping address")
-        self._write_event(update_order=uo)
+            op = mass_patch.OpString.ADD
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=op,
+            fields=[field_name],
+            obj=address_obj,
+        )
 
     def commit_items(self, order_id):
-        if not self.expect_error and order_id.raw not in self.orders:
-            raise Exception("Unknown order: {}".format(order_id))
-        commit = mevents.UpdateOrder(
-            id=order_id,
-            commit_items=mevents.UpdateOrder.CommitItems(),
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["State"],
+            obj=mass_order.OrderState.COMMITTED,
+            wait=self.expect_error,
         )
-        self._write_event(update_order=commit)
 
-    def choose_payment(self, order_id, currency=None, payee_name="default"):
-        if not self.expect_error and order_id.raw not in self.orders:
-            raise Exception("Unknown order: {}".format(order_id))
+    def choose_payment(self, order_id, currency=None, payee=None):
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+
+        # Set chosen currency
         if currency is None:
             currency = self.default_currency
-        payee = self.default_payee
-        if payee_name in self.payees:
-            payee = self.payees[payee_name]
-        method = mevents.UpdateOrder(
-            id=order_id,
-            choose_payment=mevents.UpdateOrder.ChoosePaymentMethod(
-                currency=currency,
-                payee=payee,
-            ),
-        )
-        self._write_event(update_order=method)
 
-    def change_inventory(self, listing_id: int, change: int, variations=None):
-        if not self.expect_error and listing_id.raw not in self.listings:
-            raise Exception(f"Unknown listing: {listing_id}")
-        evt = mevents.ChangeInventory(
-            id=listing_id, diff=change, variation_ids=variations
-        )
-        self._write_event(change_inventory=evt)
+        # Set chosen payee
+        if payee is None:
+            payee = self.default_payee
 
-    def check_inventory(self, listing_id: int, variations=[]):
-        lookup_id = vid(listing_id, variations)
-        return self.inventory.get(lookup_id, 0)
+        was_batching_before = self.batching_enabled
+        if not was_batching_before:
+            self.start_batch()
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["ChosenCurrency"],
+            obj=currency,
+        )
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["ChosenPayee"],
+            obj=payee,
+        )
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["State"],
+            obj=mass_order.OrderState.PAYMENT_CHOSEN,
+        )
+
+        if not was_batching_before:
+            self.flush_batch()

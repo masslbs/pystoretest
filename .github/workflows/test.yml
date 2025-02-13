@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 name: test
 on: [push]
 jobs:
@@ -18,7 +22,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: masslbs/network-schema
-          ssh-key: ${{ secrets.SSH_CHECKOUT_NETWORK_SCHEMA }}
           path: network-schema
 
       - name: Client import check

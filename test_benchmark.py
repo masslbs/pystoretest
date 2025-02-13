@@ -1,6 +1,8 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
 import datetime as dt
-import random
-import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable
@@ -10,8 +12,10 @@ import pytest
 import humanize
 
 # our imports
+from massmarket.cbor import patch as mass_patch
+
 from client import RelayClient
-import pbfact  # test data factory
+import objfactory
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(threadName)s: %(message)s"
@@ -35,8 +39,9 @@ def human_durr(dt: dt.timedelta):
     return humanize.naturaldelta(dt)
 
 
+@pytest.mark.parametrize("batch_size", [1, 10, 50, 100, 250])
 def test_bench_upload_listings_no_wait(
-    make_client: Callable[..., RelayClient], benchmark
+    make_client: Callable[..., RelayClient], benchmark, batch_size
 ):
     sender = make_client("tx")
     sender.register_shop()
@@ -52,17 +57,45 @@ def test_bench_upload_listings_no_wait(
     assert count * rounds > 1000
 
     def create_listings():
-        return ([pbfact.create_test_listings(count)]), {}
+        return ([objfactory.create_test_listings(count)]), {}
 
     def upload(listings):
         # in this test we don't write for responses
         # but if we dont respond to pings we will get disconnected
         last_handle = now()
-        for l in listings:
-            if since(last_handle).seconds > 2:
-                sender.handle_all()
-                last_handle = now()
-            sender._write_event(listing=l, wait=False)
+
+        if batch_size > 1:
+            # Process in batches
+            for i in range(0, len(listings), batch_size):
+                if since(last_handle).seconds > 2:
+                    sender.handle_all()
+                    last_handle = now()
+
+                batch = listings[i : i + batch_size]
+                sender.start_batch()
+                for l in batch:
+                    sender._write_patch(
+                        obj=l,
+                        object_id=l.id,
+                        type=mass_patch.ObjectType.LISTING,
+                        op="add",
+                        wait=False,
+                    )
+                sender.flush_batch(wait=False)
+        else:
+            # Process individually (no batching)
+            for l in listings:
+                if since(last_handle).seconds > 2:
+                    sender.handle_all()
+                    last_handle = now()
+                sender._write_patch(
+                    obj=l,
+                    object_id=l.id,
+                    type=mass_patch.ObjectType.LISTING,
+                    op="add",
+                    wait=False,
+                )
+
         sender.handle_all()
 
     benchmark.pedantic(
@@ -93,11 +126,16 @@ def skip_test_bench_upload_listings_wait_response(
     assert count * rounds >= 1000
 
     def create_listings():
-        return ([pbfact.create_test_listings(count)]), {}
+        return ([objfactory.create_test_listings(count)]), {}
 
     def upload(listings):
         for l in listings:
-            sender._write_event(listing=l)
+            sender._write_patch(
+                obj=l,
+                object_id=l.id,
+                type=mass_patch.ObjectType.LISTING,
+                op="add",
+            )
 
     benchmark.pedantic(
         upload,
@@ -119,7 +157,7 @@ def test_bench_download_listings(make_client: Callable[..., RelayClient], benchm
     assert sender.errors == 0
 
     count = 250
-    listings = pbfact.create_test_listings(count)
+    listings = objfactory.create_test_listings(count)
     rounds = 15
     assert count * rounds > 1000
 
@@ -129,7 +167,13 @@ def test_bench_download_listings(make_client: Callable[..., RelayClient], benchm
         if since(last_handle).seconds > 2:
             sender.handle_all()
             last_handle = now()
-        sender._write_event(listing=l, wait=False)
+        sender._write_patch(
+            obj=l,
+            object_id=l.id,
+            type=mass_patch.ObjectType.LISTING,
+            op="add",
+            wait=False,
+        )
     sender.handle_all()
     sender.close()
 
@@ -147,10 +191,10 @@ def test_bench_download_listings(make_client: Callable[..., RelayClient], benchm
     def download(rx):
         rx.subscribe_all()
         fetch_start = now()
-        while len(rx.listings) < count:
+        while rx.shop.listings.size < count:
             assert since(fetch_start).seconds < 10
             rx.handle_all()
-        return len(rx.listings)
+        return rx.shop.listings.size
 
     result = benchmark.pedantic(
         download,
