@@ -124,13 +124,13 @@
 
   massmarket = pinnedPython.pkgs.buildPythonPackage rec {
     pname = "massmarket";
-    version = "4.0";
-    # src = pkgs.python3.pkgs.fetchPypi {
-    #   inherit pname version;
-    #   hash = "sha256-vc9oSq7wt9s+qLSJTuhTAw4TFHmtBTGh5VGkSgPX7cQ=";
-    # };
+    version = "4";
+    src = pkgs.python3.pkgs.fetchPypi {
+      inherit pname version;
+      hash = "sha256-fyDLIV8n8bAVcVcDze+FAlpfOUIlTnf+ozBoBLPC2t8=";
+    };
     # to test pre-releases run 'make build' in network-schema/python and update the path below
-    src = ./massmarket-4.0-pre.tar.gz;
+    # src = ./massmarket-4.0-pre.tar.gz;
     format = "pyproject";
     buildInputs = [
       pinnedPython.pkgs.setuptools
