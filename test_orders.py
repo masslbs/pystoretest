@@ -32,8 +32,8 @@ def new_uint256(i):
 def prepare_order(c: RelayClient):
     assert c.shop is not None, "shop not initialized"
     # a1 writes an a few events
-    iid1 = c.create_listing("sneakers", 10)
-    iid2 = c.create_listing("caps", 5)
+    iid1 = c.create_listing("sneakers", int(0.001 * 10**18))  # 0.001 ETH
+    iid2 = c.create_listing("caps", int(0.0005 * 10**18))  # 0.0005 ETH
     c.change_inventory(iid1, 3)
     c.change_inventory(iid2, 5)
     assert c.errors == 0
@@ -582,8 +582,7 @@ def test_orders_happy_eth_byCall(make_client):
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    # testing ether is 2:1 => (20 in fiat + 5% fee => 21) * 2 => 42
-    assert total == 20
+    assert total == 0.002 * 10**18
 
     # pay the order (usually this wouldnt be done by the clerk itself but let's not mess with another user now)
     start_send = now()
@@ -634,8 +633,7 @@ def test_orders_happy_eth_byAddress(make_client):
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    # testing ether is 2:1 => (20 in fiat + 5% fee => 21) * 2 => 42
-    assert total == 20
+    assert total == 0.002 * 10**18
 
     pr = {
         "ttl": int(order.payment_details.ttl),
@@ -721,7 +719,7 @@ def test_orders_happy_erc20_byAddress(make_client: Callable[[str], RelayClient])
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    assert total == 40
+    assert total == 300 # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
 
     # wait for next block so we dont pay before the the watcher is waiting
     # unless next-block time is less then a second this shouldnt be a problem in reality
@@ -803,7 +801,7 @@ def test_orders_happy_erc20_byCall(make_client):
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    assert total == 40
+    assert total == 300 # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
 
     beforePaid = alice.erc20Token.functions.balanceOf(alice.account.address).call()
 
@@ -857,7 +855,7 @@ def test_orders_choose_payment_twice(make_client):
     alice.update_shop_manifest(add_currency=erc20_curr)
     assert alice.errors == 0
 
-    oid, iid1, iid2 = prepare_order(alice)
+    oid, _, _ = prepare_order(alice)
 
     alice.commit_items(oid)
     alice.update_address_for_order(oid, invoice=default_addr)
@@ -865,7 +863,7 @@ def test_orders_choose_payment_twice(make_client):
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    assert total == 40
+    assert total == 300 # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
 
     # choose payment again
     eth_curr = mbase.ChainAddress(address=bytes(20), chain_id=alice.chain_id)
