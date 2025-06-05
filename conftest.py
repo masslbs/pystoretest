@@ -67,6 +67,7 @@ def make_client(account_manager) -> Generator[Callable[..., RelayClient], Any, A
         guest: bool = False,
         private_key: bytes | None = None,
         auto_connect: bool = True,
+        validate_patches: bool = True,
     ):
         acc = None
         if not private_key:
@@ -77,6 +78,7 @@ def make_client(account_manager) -> Generator[Callable[..., RelayClient], Any, A
             wallet_account=acc,
             wallet_private_key=private_key,
             auto_connect=auto_connect,
+            validate_patches=validate_patches,
         )
         if shop is not None:
             c.shop_token_id = shop

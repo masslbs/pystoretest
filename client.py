@@ -121,11 +121,19 @@ def cbor_now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
 
 
+js_safe = False
+# Ensure value fits in 53 bits for JavaScript compatibility
+# https://github.com/masslbs/Tennessine/issues/342
+if os.getenv("JS_SAFE") in ["true", "1", "yes", "on"]:
+    js_safe = True
+seed_data_width = 4 if js_safe else 8
+
+
 def new_object_id(i=None):
     if i is None:
-        r = random.randbytes(8)
+        r = random.randbytes(seed_data_width)
     else:
-        r = i.to_bytes(8, "big")
+        r = i.to_bytes(seed_data_width, "big")
     return int.from_bytes(r, "big")
 
 
@@ -216,9 +224,11 @@ class RelayClient:
         auto_connect=True,
         debug=False,
         log_file=None,
+        validate_patches=True,
     ):
         self.name = name
         self.debug = debug
+        self.validate_patches = validate_patches
         self.log_patches = os.getenv("LOG_PATCHES") in ["true", "1", "yes", "on"]
         current_time = datetime.datetime.now(datetime.UTC)
         self.start_time = current_time
@@ -564,8 +574,11 @@ class RelayClient:
             self.w3, self.account, func, max_attempts=max_attempts
         )
 
-    def register_shop(self):
-        token_id = int.from_bytes(os.urandom(32), "big")
+    def register_shop(self, token_id=None):
+        if token_id is None:
+            token_id = int.from_bytes(os.urandom(32), "big")
+        else:
+            assert isinstance(token_id, int)
         tx = self.transact_with_retry(
             self.shopReg.functions.mint(token_id, self.account.address)
         )
@@ -925,7 +938,9 @@ class RelayClient:
 
             header = mass_patch.PatchSetHeader.from_cbor(set.header)
 
-            signed_by = self._verify_signature(set.header, set.signature)
+            signed_by = None
+            if self.validate_patches:
+                signed_by = self._verify_signature(set.header, set.signature)
 
             for i, patch_data in enumerate(set.patches):
 
