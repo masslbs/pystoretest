@@ -28,20 +28,20 @@ from test_orders import wait_for_finalization
 # this typically breaks when anvil is restarted / the shopReg contracts are re-created
 
 
-def skip_test_make_hydration_data(make_client: Callable[[str], RelayClient]):
+def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     """
     Creates a shop with listings, inventory, and orders, then returns the shop owner client
     and a dictionary containing all the relevant IDs and keys for testing.
 
     This function can be used for hydration tests that assume test data is already present.
     """
-    # TODO: disable this to refresh the test data. needs to be in sync with the relay
-    if True:
+    if os.getenv("TEST_MAKE_HYDRATION_DATA") == "":
+        pytest.skip("TEST_MAKE_HYDRATION_DATA is not set")
         return
 
     # Create the shop owner
     owner: RelayClient = make_client("shop_owner")
-    shop_id = owner.register_shop()
+    shop_id = owner.register_shop(token_id=1234)
     owner.enroll_key_card()
     owner.login()
     owner.create_shop_manifest()
@@ -58,41 +58,41 @@ def skip_test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         assert owner.errors == 0
         listing_ids.append(listing_id)
 
-    # Create a customer and place some orders
-    customer: RelayClient = make_client(
-        "customer", shop=shop_id, guest=True, private_key=os.urandom(32)
+    # Create a customer one and place some orders
+    cust1: RelayClient = make_client(
+        "customer1", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
-    customer.enroll_key_card()
-    customer.login(subscribe=False)
-    customer.subscribe(filters=[])
-    assert customer.errors == 0
+    cust1.enroll_key_card()
+    cust1.login(subscribe=False)
+    cust1.subscribe(filters=[])
+    assert cust1.errors == 0
 
     # Create first order with multiple items
-    order_id1 = customer.create_order()
-    customer.add_to_order(order_id1, listing_ids[0], 2)
-    customer.add_to_order(order_id1, listing_ids[1], 1)
-    customer.commit_items(order_id1)
-    assert customer.errors == 0
+    order_id1 = cust1.create_order()
+    cust1.add_to_order(order_id1, listing_ids[0], 2)
+    cust1.add_to_order(order_id1, listing_ids[1], 1)
+    cust1.commit_items(order_id1)
+    assert cust1.errors == 0
 
     # Create second order with a single item
-    order_id2 = customer.create_order()
-    customer.add_to_order(order_id2, listing_ids[2], 3)
-    customer.commit_items(order_id2)
-    assert customer.errors == 0
+    order_id2 = cust1.create_order()
+    cust1.add_to_order(order_id2, listing_ids[2], 3)
+    cust1.commit_items(order_id2)
+    assert cust1.errors == 0
 
-    # Create a guest user and have them place an order
-    guest: RelayClient = make_client(
-        "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
+    # Create a second customer and have them place an order
+    cust2: RelayClient = make_client(
+        "customer2", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
-    guest.enroll_key_card()
-    guest.login(subscribe=False)
-    guest.subscribe(filters=[])
-    assert guest.errors == 0
+    cust2.enroll_key_card()
+    cust2.login(subscribe=False)
+    cust2.subscribe(filters=[])
+    assert cust2.errors == 0
 
-    guest_order_id = guest.create_order()
-    guest.add_to_order(guest_order_id, listing_ids[3], 5)
-    guest.commit_items(guest_order_id)
-    assert guest.errors == 0
+    order_id3 = cust2.create_order()
+    cust2.add_to_order(order_id3, listing_ids[3], 5)
+    cust2.commit_items(order_id3)
+    assert cust2.errors == 0
 
     owner.handle_all()
     assert owner.errors == 0
@@ -104,27 +104,26 @@ def skip_test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         "owner_address": owner.account.address,
         "owner_wallet_private_key": owner.account.key,
         "owner_keycard_private_key": owner.own_key_card.key,
-        "customer_address": customer.account.address,
-        "customer_wallet_private_key": customer.account.key,
-        "customer_keycard_private_key": customer.own_key_card.key,
-        "guest_address": guest.account.address,
-        "guest_wallet_private_key": guest.account.key,
-        "guest_keycard_private_key": guest.own_key_card.key,
+        "customer1_address": cust1.account.address,
+        "customer1_wallet_private_key": cust1.account.key,
+        "customer1_keycard_private_key": cust1.own_key_card.key,
+        "customer2_address": cust2.account.address,
+        "customer2_wallet_private_key": cust2.account.key,
+        "customer2_keycard_private_key": cust2.own_key_card.key,
         "listing_ids": listing_ids,
         "order_ids": {
-            "customer_orders": [order_id1, order_id2],
-            "guest_order": guest_order_id,
+            "customer1_orders": [order_id1, order_id2],
+            "customer2_order": order_id3,
         },
     }
 
-    with open("test_shop_hydration_data.cbor", "wb") as f:
+    with open("shop_hydration_data.cbor", "wb") as f:
         import cbor2
-
         cbor2.dump(test_data, f)
 
     # Close customer and guest connections
-    customer.close()
-    guest.close()
+    cust1.close()
+    cust2.close()
     owner.close()
 
 
@@ -132,10 +131,10 @@ def skip_test_shop_hydration_from_cbor(make_client):
     """Test that we can hydrate a shop from CBOR data and access the expected data."""
 
     # Check if the CBOR file exists
-    cbor_path = Path("test_shop_hydration_data.cbor")
+    cbor_path = Path("shop_hydration_data.cbor")
     if not cbor_path.exists():
         pytest.skip(
-            "test_shop_hydration_data.cbor not found, run test_create_shop_with_listings_and_orders first"
+            "shop_hydration_data.cbor not found, run test_make_hydration_data first"
         )
 
     # Load the test data from CBOR

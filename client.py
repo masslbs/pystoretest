@@ -564,8 +564,11 @@ class RelayClient:
             self.w3, self.account, func, max_attempts=max_attempts
         )
 
-    def register_shop(self):
-        token_id = int.from_bytes(os.urandom(32), "big")
+    def register_shop(self, token_id=None):
+        if token_id is None:
+            token_id = int.from_bytes(os.urandom(32), "big")
+        else:
+            assert isinstance(token_id, int)
         tx = self.transact_with_retry(
             self.shopReg.functions.mint(token_id, self.account.address)
         )
