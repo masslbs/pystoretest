@@ -105,20 +105,26 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     test_data = {
         "shop_id": shop_id,
         "shop_root": owner.shop.hash(),
-        "owner_address": owner.account.address,
-        "owner_wallet_private_key": owner.account.key,
-        "owner_keycard_private_key": owner.own_key_card.key,
-        "customer1_address": cust1.account.address,
-        "customer1_wallet_private_key": cust1.account.key,
-        "customer1_keycard_private_key": cust1.own_key_card.key,
-        "customer2_address": cust2.account.address,
-        "customer2_wallet_private_key": cust2.account.key,
-        "customer2_keycard_private_key": cust2.own_key_card.key,
-        "listing_ids": listing_ids,
-        "order_ids": {
-            "customer1_orders": [order_id1, order_id2],
-            "customer2_order": order_id3,
+        "owner": {
+            "address": owner.account.address,
+            "wallet_private_key": owner.account.key,
+            "keycard_private_key": owner.own_key_card.key,
         },
+        "customers": {
+            "customer1": {
+                "address": cust1.account.address,
+                "wallet_private_key": cust1.account.key, 
+                "keycard_private_key": cust1.own_key_card.key,
+                "orders": [order_id1, order_id2]
+            },
+            "customer2": {
+                "address": cust2.account.address,
+                "wallet_private_key": cust2.account.key,
+                "keycard_private_key": cust2.own_key_card.key,
+                "orders": [order_id3]
+            }
+        },
+        "listing_ids": listing_ids,
     }
 
     with open(seed_data_path, "wb") as f:
