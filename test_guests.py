@@ -24,9 +24,13 @@ from client import RelayClient, new_object_id
 
 from test_orders import wait_for_finalization
 
-# TODO: to make these hydration tests work we need to find a way for hasAccess(shopId, clerk) to work consistently
-# this typically breaks when anvil is restarted / the shopReg contracts are re-created
-
+def check_seed_data_path(seed_data_path: str | None) -> None:
+    if seed_data_path is None:
+        pytest.skip("TEST_MAKE_HYDRATION_DATA is not set")
+        return
+    if not Path(seed_data_path).exists():
+        pytest.skip(f"TEST_MAKE_HYDRATION_DATA data file {seed_data_path} does not exist")
+        return
 
 def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     """
@@ -35,9 +39,9 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
 
     This function can be used for hydration tests that assume test data is already present.
     """
-    if os.getenv("TEST_MAKE_HYDRATION_DATA") == "":
-        pytest.skip("TEST_MAKE_HYDRATION_DATA is not set")
-        return
+
+    seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
+    check_seed_data_path(seed_data_path)
 
     # Create the shop owner
     owner: RelayClient = make_client("shop_owner")
@@ -117,7 +121,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         },
     }
 
-    with open("shop_hydration_data.cbor", "wb") as f:
+    with open(seed_data_path, "wb") as f:
         import cbor2
         cbor2.dump(test_data, f)
 
@@ -131,14 +135,11 @@ def skip_test_shop_hydration_from_cbor(make_client):
     """Test that we can hydrate a shop from CBOR data and access the expected data."""
 
     # Check if the CBOR file exists
-    cbor_path = Path("shop_hydration_data.cbor")
-    if not cbor_path.exists():
-        pytest.skip(
-            "shop_hydration_data.cbor not found, run test_make_hydration_data first"
-        )
+    seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
+    check_seed_data_path(seed_data_path)
 
     # Load the test data from CBOR
-    with open(cbor_path, "rb") as f:
+    with open(seed_data_path, "rb") as f:
         test_data = cbor2.load(f)
 
     # Extract the data we need
