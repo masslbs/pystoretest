@@ -44,7 +44,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     check_seed_data_path(seed_data_path)
 
     # Create the shop owner
-    owner: RelayClient = make_client("shop_owner")
+    owner: RelayClient = make_client("shop_owner", private_key=os.getenv("ETH_PRIVATE_KEY"))
     shop_id = owner.register_shop(token_id=1234)
     owner.enroll_key_card()
     owner.login()
