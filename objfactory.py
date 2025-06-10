@@ -15,14 +15,13 @@ from massmarket.cbor import (
 class Uint256Factory(factory.Factory):
     class Meta:
         model = mass_base.Uint256
-
     value = factory.LazyFunction(lambda: random.randint(1, 1000) * 100)
 
 
 # Helper function to generate product-like names
 def generate_product_name():
-    adjectives = ["Premium", "Deluxe", "Classic", "Modern", "Eco-friendly"]
-    categories = ["Shirt", "Pants", "Jacket", "Shoes", "Bag", "Hat"]
+    adjectives = ["Playful", "Sleepy", "Curious", "Fluffy", "Mischievous"]
+    categories = ["Kitten", "Tabby", "Persian", "Siamese", "Calico", "Maine Coon"]
     return f"{random.choice(adjectives)} {random.choice(categories)}"
 
 
