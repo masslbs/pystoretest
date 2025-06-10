@@ -2,13 +2,15 @@
 #
 # SPDX-License-Identifier: MIT
 
-import cbor2
 from pathlib import Path
 import os
+import binascii
 from pprint import pprint
+import cbor2
 import pytest
 from typing import Callable, Tuple
 from eth_keys.datatypes import PrivateKey, PublicKey
+from web3.exceptions import ContractCustomError
 
 from massmarket import (
     subscription_pb2,
@@ -21,6 +23,7 @@ import massmarket.cbor.manifest as mmanifest
 import massmarket.cbor.patch as mpatch
 
 from client import RelayClient, new_object_id
+import objfactory
 
 from test_orders import wait_for_finalization
 
@@ -40,27 +43,55 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     This function can be used for hydration tests that assume test data is already present.
     """
 
+    # Create the shop owner
+    owner: RelayClient = make_client("shop_owner", private_key=os.getenv("ETH_PRIVATE_KEY"))
+
+    # Check if shop already exists
+    shop_token_id = 4660  # = 0x1234
+    try:
+        existing_owner = owner.shopReg.functions.ownerOf(shop_token_id).call()
+        if existing_owner is not None:
+            pytest.skip(f"Shop {shop_token_id} already exists, owned by {existing_owner}")
+    except ContractCustomError as ex:
+        if ex.data != "0xceea21b6": # token doesnt exist
+            raise ex
+
+
     seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
     check_seed_data_path(seed_data_path)
 
-    # Create the shop owner
-    owner: RelayClient = make_client("shop_owner", private_key=os.getenv("ETH_PRIVATE_KEY"))
-    shop_id = owner.register_shop(token_id=1234)
+    shop_id = owner.register_shop(token_id=shop_token_id)
     owner.enroll_key_card()
     owner.login()
     owner.create_shop_manifest()
     assert owner.errors == 0
 
-    # Create some listings and inventory
+    # Create some listings using objfactory
+    listings = objfactory.create_test_listings(50)
     listing_ids = []
-    for i, (name, price) in enumerate(
-        [("Book", 1999), ("T-Shirt", 2499), ("Coffee Mug", 1499), ("Sticker Pack", 599)]
-    ):
-        listing_id = owner.create_listing(name, price)
+
+    # TODO: we should be able to batch this    
+    for i, listing in enumerate(listings):
+        # Add the listing using _write_patch like in the benchmark
+        owner._write_patch(
+            obj=listing,
+            object_id=listing.id,
+            type=mpatch.ObjectType.LISTING,
+            op="add",
+        )
         assert owner.errors == 0
-        owner.change_inventory(listing_id, 100 - i * 10)  # Different inventory levels
+
+        listing_ids.append(listing.id)
+        
+        # Change inventory levels (different for each listing)
+        owner._write_patch(
+            type=mpatch.ObjectType.INVENTORY,
+            object_id=listing.id,
+            op=mpatch.OpString.ADD,
+            obj=1000 - i * 10,
+        )
         assert owner.errors == 0
-        listing_ids.append(listing_id)
+
 
     # Create a customer one and place some orders
     cust1: RelayClient = make_client(
@@ -76,6 +107,15 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     cust1.add_to_order(order_id1, listing_ids[0], 2)
     cust1.add_to_order(order_id1, listing_ids[1], 1)
     cust1.commit_items(order_id1)
+    cust1.update_address_for_order(order_id1, invoice=morder.AddressDetails(
+        name="Max Testdata",
+        address1="Somestreet 1",
+        city="City",
+        postal_code="12345",
+        country="Isla de Muerta",
+        email_address="max@testdata.com"
+    ))
+    # cust1.choose_payment(order_id1, payee=owner.default_payee)
     assert cust1.errors == 0
 
     # Create second order with a single item
@@ -137,8 +177,8 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     owner.close()
 
 
-def skip_test_shop_hydration_from_cbor(make_client):
-    """Test that we can hydrate a shop from CBOR data and access the expected data."""
+def test_shop_hydration_from_seed(make_client):
+    """Test that we can hydrate a shop from seed data and access the expected data."""
 
     # Check if the CBOR file exists
     seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
@@ -151,16 +191,15 @@ def skip_test_shop_hydration_from_cbor(make_client):
     # Extract the data we need
     shop_id = test_data["shop_id"]
     shop_root = test_data["shop_root"]
-    owner_address = test_data["owner_address"]
-    owner_wallet_private_key = test_data["owner_wallet_private_key"]
-    owner_keycard_private_key = test_data["owner_keycard_private_key"]
-    customer_wallet_private_key = test_data["customer_wallet_private_key"]
-    customer_keycard_private_key = test_data["customer_keycard_private_key"]
-    guest_address = test_data["guest_address"]
-    guest_wallet_private_key = test_data["guest_wallet_private_key"]
-    guest_keycard_private_key = test_data["guest_keycard_private_key"]
+    owner_wallet_private_key = test_data["owner"]["wallet_private_key"]
+    owner_keycard_private_key = test_data["owner"]["keycard_private_key"]
+    customer_wallet_private_key = test_data["customers"]["customer1"]["wallet_private_key"]
+    customer_keycard_private_key = test_data["customers"]["customer1"]["keycard_private_key"]
+    guest_wallet_private_key = test_data["customers"]["customer2"]["wallet_private_key"]
+    guest_keycard_private_key = test_data["customers"]["customer2"]["keycard_private_key"]
     listing_ids = test_data["listing_ids"]
-    order_ids = test_data["order_ids"]
+    customer1_order_ids = test_data["customers"]["customer1"]["orders"]
+    customer2_order_ids = test_data["customers"]["customer2"]["orders"]
 
     # Connect as the owner to verify shop data
     owner = RelayClient(
@@ -186,14 +225,14 @@ def skip_test_shop_hydration_from_cbor(make_client):
     assert customer.errors == 0
 
     # Verify customer orders
-    for order_id in order_ids["customer_orders"]:
+    for order_id in customer1_order_ids:
         assert owner.shop.orders.has(
             order_id
         ), f"Customer order {order_id} not found in shop"
 
     assert customer.shop.orders.has(
-        order_ids["customer_orders"][0]
-    ), f"Customer order {order_ids['customer_orders'][0]} not found in customer shop"
+        customer1_order_ids[0]
+    ), f"Customer order {customer1_order_ids[0]} not found in customer shop"
 
     # Connect as the guest to verify their order
     guest = RelayClient(
@@ -208,21 +247,13 @@ def skip_test_shop_hydration_from_cbor(make_client):
     assert guest.errors == 0
 
     # Verify guest order
-    guest_order_id = order_ids["guest_order"]
+    guest_order_id = customer2_order_ids[0]
     assert owner.shop.orders.has(
         guest_order_id
     ), f"Guest order {guest_order_id} not found in shop"
     assert guest.shop.orders.has(
         guest_order_id
     ), f"Guest order {guest_order_id} not found in guest shop"
-
-    # Verify the guest account exists
-    import binascii
-
-    guest_address = binascii.unhexlify(guest_address[2:])
-    assert owner.shop.accounts.has(
-        guest_address
-    ), f"Guest account {guest_address} not found in shop"
 
     # Verify shop has the expected listings
     for listing_id in listing_ids:

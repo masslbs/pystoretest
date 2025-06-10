@@ -120,12 +120,18 @@ def now_pbts() -> timestamp_pb2.Timestamp:
 def cbor_now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
 
+js_safe = False
+# Ensure value fits in 53 bits for JavaScript compatibility
+# https://github.com/masslbs/Tennessine/issues/342
+if os.getenv("JS_SAFE") in ["true", "1", "yes", "on"]:
+    js_safe = True
+seed_data_width = 6 if js_safe else 8
 
 def new_object_id(i=None):
     if i is None:
-        r = random.randbytes(8)
+        r = random.randbytes(seed_data_width)
     else:
-        r = i.to_bytes(8, "big")
+        r = i.to_bytes(seed_data_width, "big")
     return int.from_bytes(r, "big")
 
 
