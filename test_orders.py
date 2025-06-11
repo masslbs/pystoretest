@@ -52,6 +52,13 @@ def prepare_order(c: RelayClient):
 
     order = c.shop.orders.get(oid)
     assert order is not None
+    for _ in range(10):
+        c.handle_all()
+        order = c.shop.orders.get(oid)
+        if len(order.items) == 2:
+            break
+    else:
+        raise Exception("Timed out waiting for order items")
     assert len(order.items) == 2
     item_ids = [item.listing_id for item in order.items]
     assert iid1 in item_ids
