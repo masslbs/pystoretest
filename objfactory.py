@@ -15,6 +15,7 @@ from massmarket.cbor import (
 class Uint256Factory(factory.Factory):
     class Meta:
         model = mass_base.Uint256
+
     value = factory.LazyFunction(lambda: random.randint(1, 1000) * 100)
 
 
@@ -25,23 +26,15 @@ def generate_product_name():
     return f"{random.choice(adjectives)} {random.choice(categories)}"
 
 
-dataset = "QmRzcQUvnJDiNJoi5KdnHAdHaErAwmJvss154Enp3Ssjsw"
-
-images = [
-    "pexels-bearmax-1077093-3960037.jpg",
-    "pexels-catscoming-2942325.jpg",
-    "pexels-cottonbro-6865166.jpg",
-    "pexels-d-ng-nhan-324384-2817412.jpg",
-    "pexels-fotios-photos-1852914.jpg",
-    "pexels-fox-58267-1265624.jpg",
-    "pexels-milivigerova-5989344.jpg",
-    "pexels-minan1398-693651.jpg",
-    "pexels-mtyutina-3206572.jpg",
-    "pexels-myca-1311572.jpg",
-    "pexels-natalie-bond-320378-3257811.jpg",
-    "pexels-tamba09-979248.jpg",
-    "pexels-yuliya-kota-2099022-3791591.jpg"
+# for fetching https://http.cat/images/[status_code].jpg
+http_status_codes = [
+    100, 101, 102, 103, 200, 201, 202, 203, 204, 205, 206, 207, 208, 214, 226, 300, 301,
+    302, 303, 304, 305, 307, 308, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410,
+    411, 412, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 428,
+    429, 431, 444, 450, 451, 495, 496, 497, 498, 499, 500, 501, 502, 503, 504, 505, 506,
+    507, 508, 509, 510, 511, 522, 523, 525, 530, 599,
 ]
+
 
 class ListingMetadataFactory(factory.Factory):
     class Meta:
@@ -51,7 +44,10 @@ class ListingMetadataFactory(factory.Factory):
     description = factory.Faker("text", max_nb_chars=300)
     images = factory.LazyFunction(
         # TODO: assuming localhost:8080 is the ipfs gateway
-        lambda: [f"http://localhost:8080/ipfs/{dataset}/{random.choice(images)}" for _ in range(random.randint(1, 5))]
+        lambda: [
+            f"https://http.cat/images/{random.choice(http_status_codes)}.jpg"
+            for _ in range(random.randint(1, 5))
+        ]
     )
 
 

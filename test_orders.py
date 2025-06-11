@@ -726,7 +726,9 @@ def test_orders_happy_erc20_byAddress(make_client: Callable[[str], RelayClient])
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    assert total == 300 # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
+    assert (
+        total == 300
+    )  # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
 
     # wait for next block so we dont pay before the the watcher is waiting
     # unless next-block time is less then a second this shouldnt be a problem in reality
@@ -808,7 +810,9 @@ def test_orders_happy_erc20_byCall(make_client):
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    assert total == 300 # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
+    assert (
+        total == 300
+    )  # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
 
     beforePaid = alice.erc20Token.functions.balanceOf(alice.account.address).call()
 
@@ -870,7 +874,9 @@ def test_orders_choose_payment_twice(make_client):
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
     total = int(order.payment_details.total)
-    assert total == 300 # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
+    assert (
+        total == 300
+    )  # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
 
     # choose payment again
     eth_curr = mbase.ChainAddress(address=bytes(20), chain_id=alice.chain_id)

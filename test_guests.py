@@ -11,6 +11,7 @@ import pytest
 from typing import Callable, Tuple
 from eth_keys.datatypes import PrivateKey, PublicKey
 from web3.exceptions import ContractCustomError
+import time
 
 from massmarket import (
     subscription_pb2,
@@ -27,13 +28,37 @@ import objfactory
 
 from test_orders import wait_for_finalization
 
-def check_seed_data_path(seed_data_path: str | None) -> None:
+
+def check_seed_data_path(seed_data_path: str | None, read_only: bool = False) -> None:
     if seed_data_path is None:
         pytest.skip("TEST_MAKE_HYDRATION_DATA is not set")
         return
-    if not Path(seed_data_path).exists():
-        pytest.skip(f"TEST_MAKE_HYDRATION_DATA data file {seed_data_path} does not exist")
+
+    path = Path(seed_data_path)
+    if not path.parent.exists():
+        pytest.skip(
+            f"TEST_MAKE_HYDRATION_DATA parent directory {path.parent} does not exist"
+        )
         return
+
+    if read_only:
+        if not path.exists():
+            pytest.skip(
+                f"TEST_MAKE_HYDRATION_DATA data file {seed_data_path} does not exist"
+            )
+            return
+        return
+
+    # Check if directory is writable
+    try:
+        parent_dir = path.parent
+        test_file = parent_dir / f"test_{path.name}"
+        test_file.touch()
+        test_file.unlink()
+    except (OSError, PermissionError):
+        pytest.skip(f"Directory {parent_dir} is not writable")
+        return
+
 
 def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     """
@@ -44,18 +69,83 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     """
 
     # Create the shop owner
-    owner: RelayClient = make_client("shop_owner", private_key=os.getenv("ETH_PRIVATE_KEY"))
+    owner: RelayClient = make_client(
+        "shop_owner", private_key=os.getenv("ETH_PRIVATE_KEY")
+    )
 
     # Check if shop already exists
     shop_token_id = 4660  # = 0x1234
     try:
         existing_owner = owner.shopReg.functions.ownerOf(shop_token_id).call()
         if existing_owner is not None:
-            pytest.skip(f"Shop {shop_token_id} already exists, owned by {existing_owner}")
+            pytest.skip(
+                f"Shop {shop_token_id} already exists, owned by {existing_owner}"
+            )
     except ContractCustomError as ex:
-        if ex.data != "0xceea21b6": # token doesnt exist
+        if ex.data != "0xceea21b6":  # token doesnt exist
             raise ex
 
+        # NFT doesn't exist, but check if shop data exists in relay
+        # This handles the case where after a testnet restart, the blockchain state
+        # is reset (NFT doesn't exist) but the relay/postgres still has the shop data
+        print(
+            f"NFT {shop_token_id} doesn't exist, checking if shop data exists in relay..."
+        )
+        test_client: RelayClient = make_client(
+            "test_checker", private_key=os.urandom(32)
+        )
+        test_client.shop_token_id = shop_token_id
+
+        try:
+            # Try to connect and subscribe to see if shop data exists
+            test_client.connect()
+            test_client.authenticate()
+
+            # Subscribe only to listings to check if shop data exists
+            filters = [
+                subscription_pb2.SubscriptionRequest.Filter(
+                    object_type="OBJECT_TYPE_LISTING"
+                )
+            ]
+            test_client.subscribe(filters)
+
+            # Give it some time to receive data
+            timeout = 50  # Increase timeout to be more reliable
+            received_listings = False
+            print("Waiting for shop data from relay...")
+            while timeout > 0:
+                test_client.handle_all()
+                if test_client.shop is not None and test_client.shop.listings.size > 0:
+                    received_listings = True
+                    print(
+                        f"Received {test_client.shop.listings.size} listings from relay"
+                    )
+                    break
+                timeout -= 1
+                time.sleep(0.2)  # Check every 200ms
+
+            if received_listings:
+                print(
+                    f"Shop data exists in relay with {test_client.shop.listings.size} listings. Just recreating NFT..."
+                )
+                test_client.close()
+                # Shop data exists in relay, just recreate the NFT
+                shop_id = owner.register_shop(token_id=shop_token_id)
+                owner.close()
+                pytest.skip(
+                    f"Shop data already exists in relay, recreated NFT {shop_token_id}"
+                )
+            else:
+                print("No existing shop data found in relay")
+                test_client.close()
+
+        except Exception as e:
+            print(f"Failed to check relay for existing shop data: {e}")
+            try:
+                test_client.close()
+            except:
+                pass  # Ignore close errors
+            # Continue with normal flow if we can't check the relay
 
     seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
     check_seed_data_path(seed_data_path)
@@ -70,7 +160,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     listings = objfactory.create_test_listings(50)
     listing_ids = []
 
-    # TODO: we should be able to batch this    
+    # TODO: we should be able to batch this
     for i, listing in enumerate(listings):
         # Add the listing using _write_patch like in the benchmark
         owner._write_patch(
@@ -82,7 +172,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         assert owner.errors == 0
 
         listing_ids.append(listing.id)
-        
+
         # Change inventory levels (different for each listing)
         owner._write_patch(
             type=mpatch.ObjectType.INVENTORY,
@@ -91,7 +181,6 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
             obj=1000 - i * 10,
         )
         assert owner.errors == 0
-
 
     # Create a customer one and place some orders
     cust1: RelayClient = make_client(
@@ -107,14 +196,17 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     cust1.add_to_order(order_id1, listing_ids[0], 2)
     cust1.add_to_order(order_id1, listing_ids[1], 1)
     cust1.commit_items(order_id1)
-    cust1.update_address_for_order(order_id1, invoice=morder.AddressDetails(
-        name="Max Testdata",
-        address1="Somestreet 1",
-        city="City",
-        postal_code="12345",
-        country="Isla de Muerta",
-        email_address="max@testdata.com"
-    ))
+    cust1.update_address_for_order(
+        order_id1,
+        invoice=morder.AddressDetails(
+            name="Max Testdata",
+            address1="Somestreet 1",
+            city="City",
+            postal_code="12345",
+            country="Isla de Muerta",
+            email_address="max@testdata.com",
+        ),
+    )
     # cust1.choose_payment(order_id1, payee=owner.default_payee)
     assert cust1.errors == 0
 
@@ -153,22 +245,23 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         "customers": {
             "customer1": {
                 "address": cust1.account.address,
-                "wallet_private_key": cust1.account.key, 
+                "wallet_private_key": cust1.account.key,
                 "keycard_private_key": cust1.own_key_card.key,
-                "orders": [order_id1, order_id2]
+                "orders": [order_id1, order_id2],
             },
             "customer2": {
                 "address": cust2.account.address,
                 "wallet_private_key": cust2.account.key,
                 "keycard_private_key": cust2.own_key_card.key,
-                "orders": [order_id3]
-            }
+                "orders": [order_id3],
+            },
         },
         "listing_ids": listing_ids,
     }
 
     with open(seed_data_path, "wb") as f:
         import cbor2
+
         cbor2.dump(test_data, f)
 
     # Close customer and guest connections
@@ -182,7 +275,7 @@ def test_shop_hydration_from_seed(make_client):
 
     # Check if the CBOR file exists
     seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
-    check_seed_data_path(seed_data_path)
+    check_seed_data_path(seed_data_path, read_only=True)
 
     # Load the test data from CBOR
     with open(seed_data_path, "rb") as f:
@@ -193,10 +286,16 @@ def test_shop_hydration_from_seed(make_client):
     shop_root = test_data["shop_root"]
     owner_wallet_private_key = test_data["owner"]["wallet_private_key"]
     owner_keycard_private_key = test_data["owner"]["keycard_private_key"]
-    customer_wallet_private_key = test_data["customers"]["customer1"]["wallet_private_key"]
-    customer_keycard_private_key = test_data["customers"]["customer1"]["keycard_private_key"]
+    customer_wallet_private_key = test_data["customers"]["customer1"][
+        "wallet_private_key"
+    ]
+    customer_keycard_private_key = test_data["customers"]["customer1"][
+        "keycard_private_key"
+    ]
     guest_wallet_private_key = test_data["customers"]["customer2"]["wallet_private_key"]
-    guest_keycard_private_key = test_data["customers"]["customer2"]["keycard_private_key"]
+    guest_keycard_private_key = test_data["customers"]["customer2"][
+        "keycard_private_key"
+    ]
     listing_ids = test_data["listing_ids"]
     customer1_order_ids = test_data["customers"]["customer1"]["orders"]
     customer2_order_ids = test_data["customers"]["customer2"]["orders"]
@@ -358,7 +457,9 @@ def test_guest_subscribe_to_accounts(make_client):
     assert len(clerk.all_key_cards) == 2
     guest_account = clerk.shop.accounts.get(bytes(20))
     assert guest_account is not None
-    guests_keycard_public_key = PrivateKey(guest.own_key_card.key).public_key.to_compressed_bytes().hex()
+    guests_keycard_public_key = (
+        PrivateKey(guest.own_key_card.key).public_key.to_compressed_bytes().hex()
+    )
     hexKeys = [k.key.hex() for k in guest_account.keycards]
     assert guests_keycard_public_key in hexKeys
 
