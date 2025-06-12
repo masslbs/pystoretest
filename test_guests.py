@@ -5,6 +5,8 @@
 from pathlib import Path
 import os
 from pprint import pprint
+import json
+import requests
 import cbor2
 import pytest
 from typing import Callable, Tuple
@@ -98,12 +100,14 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
             # Try to connect and subscribe to see if shop data exists
             test_client.connect()
 
-            test_client.subscribe([
-                subscription_pb2.SubscriptionRequest.Filter(
-                    object_type=f"OBJECT_TYPE_{obj_type}"
-                )
-                for obj_type in ["MANIFEST", "LISTING"]
-            ])
+            test_client.subscribe(
+                [
+                    subscription_pb2.SubscriptionRequest.Filter(
+                        object_type=f"OBJECT_TYPE_{obj_type}"
+                    )
+                    for obj_type in ["MANIFEST", "LISTING"]
+                ]
+            )
 
             # Give it some time to receive data
             timeout = 50  # Increase timeout to be more reliable
@@ -150,6 +154,41 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     shop_id = owner.register_shop(token_id=shop_token_id)
     owner.enroll_key_card()
     owner.login()
+
+    req_id = owner.get_blob_upload_url()
+    owner.handle_all()
+    while "waiting" in owner.outgoingRequests[req_id]:
+        print("waiting for blob upload url")
+        owner.handle_all()
+        assert owner.errors == 0
+    pb_resp = owner.outgoingRequests[req_id]
+
+    shop_metadata = {
+        "name": "Test HTTP Cat Shop",
+        "description": "Test HTTP Cat Shop Description", 
+        "image": "https://http.cat/images/202.jpg",
+    }
+
+    metadata_json = json.dumps(shop_metadata)
+    metadata_blob = metadata_json.encode('utf-8')
+    metadata_file = ('file', ('metadata.json', metadata_blob, 'application/json'))
+
+    upload_response = requests.post(pb_resp["url"], files=[metadata_file])
+    assert upload_response.status_code == 201
+    upload_json = upload_response.json()
+
+    assert "url" in upload_json
+    try:
+        url_parts = requests.utils.urlparse(upload_json["url"])
+        assert all([url_parts.scheme, url_parts.netloc]), "Invalid URL format"
+    except Exception as e:
+        pytest.fail(f"Invalid URL: {upload_json['url']} - {str(e)}")
+
+    tx = owner.transact_with_retry(
+        owner.shopReg.functions.setTokenURI(owner.shop_token_id, upload_json["url"])
+    )
+    owner.check_tx(tx)
+
     owner.create_shop_manifest()
     assert owner.errors == 0
 
@@ -164,7 +203,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
             obj=listing,
             object_id=listing.id,
             type=mpatch.ObjectType.LISTING,
-                        op=mpatch.OpString.ADD,
+            op=mpatch.OpString.ADD,
         )
         listing_ids.append(listing.id)
     owner.flush_batch()
@@ -173,7 +212,12 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     owner.start_batch()
     for i, listing in enumerate(listings):
         # Change inventory levels (different for each listing)
-        owner.change_inventory(listing.id, 1000 - i * 10)
+        owner._write_patch(
+            object_id=listing.id,
+            type=mpatch.ObjectType.INVENTORY,
+            op=mpatch.OpString.ADD,
+            obj=1000 - i * 10,
+        )
     owner.flush_batch()
     assert owner.errors == 0
 

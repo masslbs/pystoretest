@@ -126,7 +126,7 @@ js_safe = False
 # https://github.com/masslbs/Tennessine/issues/342
 if os.getenv("JS_SAFE") in ["true", "1", "yes", "on"]:
     js_safe = True
-seed_data_width = 6 if js_safe else 8
+seed_data_width = 4 if js_safe else 8
 
 
 def new_object_id(i=None):
