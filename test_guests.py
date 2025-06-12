@@ -92,22 +92,20 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
             f"NFT {shop_token_id} doesn't exist, checking if shop data exists in relay..."
         )
         test_client: RelayClient = make_client(
-            "test_checker", private_key=os.urandom(32)
+            "test_checker", private_key=os.urandom(32), validate_patches=False
         )
         test_client.shop_token_id = shop_token_id
 
         try:
             # Try to connect and subscribe to see if shop data exists
             test_client.connect()
-            test_client.authenticate()
 
-            # Subscribe only to listings to check if shop data exists
-            filters = [
+            test_client.subscribe([
                 subscription_pb2.SubscriptionRequest.Filter(
-                    object_type="OBJECT_TYPE_LISTING"
+                    object_type=f"OBJECT_TYPE_{obj_type}"
                 )
-            ]
-            test_client.subscribe(filters)
+                for obj_type in ["MANIFEST", "LISTING"]
+            ])
 
             # Give it some time to receive data
             timeout = 50  # Increase timeout to be more reliable
@@ -138,14 +136,11 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
             else:
                 print("No existing shop data found in relay")
                 test_client.close()
-
-        except Exception as e:
-            print(f"Failed to check relay for existing shop data: {e}")
+        finally:
             try:
                 test_client.close()
             except:
                 pass  # Ignore close errors
-            # Continue with normal flow if we can't check the relay
 
     seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
     check_seed_data_path(seed_data_path)

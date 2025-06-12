@@ -224,9 +224,11 @@ class RelayClient:
         auto_connect=True,
         debug=False,
         log_file=None,
+        validate_patches=True,
     ):
         self.name = name
         self.debug = debug
+        self.validate_patches = validate_patches
         self.log_patches = os.getenv("LOG_PATCHES") in ["true", "1", "yes", "on"]
         current_time = datetime.datetime.now(datetime.UTC)
         self.start_time = current_time
@@ -936,7 +938,9 @@ class RelayClient:
 
             header = mass_patch.PatchSetHeader.from_cbor(set.header)
 
-            signed_by = self._verify_signature(set.header, set.signature)
+            signed_by = None
+            if self.validate_patches:
+                signed_by = self._verify_signature(set.header, set.signature)
 
             for i, patch_data in enumerate(set.patches):
 
