@@ -4,14 +4,12 @@
 
 from pathlib import Path
 import os
-import binascii
 from pprint import pprint
 import cbor2
 import pytest
 from typing import Callable, Tuple
-from eth_keys.datatypes import PrivateKey, PublicKey
+from eth_keys.datatypes import PrivateKey
 from web3.exceptions import ContractCustomError
-import time
 
 from massmarket import (
     subscription_pb2,
@@ -23,7 +21,7 @@ import massmarket.cbor.order as morder
 import massmarket.cbor.manifest as mmanifest
 import massmarket.cbor.patch as mpatch
 
-from client import RelayClient, new_object_id
+from client import RelayClient, new_object_id, RelayException
 import objfactory
 
 from test_orders import wait_for_finalization
@@ -120,13 +118,11 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
                     )
                     break
                 timeout -= 1
-                time.sleep(0.2)  # Check every 200ms
 
             if received_listings:
                 print(
                     f"Shop data exists in relay with {test_client.shop.listings.size} listings. Just recreating NFT..."
                 )
-                test_client.close()
                 # Shop data exists in relay, just recreate the NFT
                 shop_id = owner.register_shop(token_id=shop_token_id)
                 owner.close()
@@ -134,8 +130,14 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
                     f"Shop data already exists in relay, recreated NFT {shop_token_id}"
                 )
             else:
-                print("No existing shop data found in relay")
-                test_client.close()
+                print("No existing listing data found in relay")
+
+        except RelayException as e:
+            if e.code != error_pb2.ErrorCodes.ERROR_CODES_NOT_FOUND:
+                raise e
+            print("No existing shop data found in relay")
+        except Exception as e:
+            pytest.fail(f"Failed to check relay for existing shop data: '{e}'")
         finally:
             try:
                 test_client.close()
@@ -155,27 +157,25 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     listings = objfactory.create_test_listings(50)
     listing_ids = []
 
-    # TODO: we should be able to batch this
+    owner.start_batch()
     for i, listing in enumerate(listings):
         # Add the listing using _write_patch like in the benchmark
         owner._write_patch(
             obj=listing,
             object_id=listing.id,
             type=mpatch.ObjectType.LISTING,
-            op="add",
+                        op=mpatch.OpString.ADD,
         )
-        assert owner.errors == 0
-
         listing_ids.append(listing.id)
+    owner.flush_batch()
+    assert owner.errors == 0
 
+    owner.start_batch()
+    for i, listing in enumerate(listings):
         # Change inventory levels (different for each listing)
-        owner._write_patch(
-            type=mpatch.ObjectType.INVENTORY,
-            object_id=listing.id,
-            op=mpatch.OpString.ADD,
-            obj=1000 - i * 10,
-        )
-        assert owner.errors == 0
+        owner.change_inventory(listing.id, 1000 - i * 10)
+    owner.flush_batch()
+    assert owner.errors == 0
 
     # Create a customer one and place some orders
     cust1: RelayClient = make_client(
