@@ -13,7 +13,8 @@ import siwe
 
 from massmarket import envelope_pb2, subscription_pb2, base_types_pb2
 
-from client import RelayClient, RelayException, EnrollException
+from massmarket_client.legacy_client import RelayClient
+from massmarket_client.utils import RelayException, EnrollException
 
 
 def test_register_shop(wc_conn: RelayClient):

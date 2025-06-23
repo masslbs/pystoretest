@@ -12,8 +12,12 @@ import massmarket.cbor.base_types as mbase
 import massmarket.cbor.order as morder
 import massmarket.cbor.listing as mlisting
 import massmarket.cbor.patch as mpatch
-from client import RelayClient, new_object_id
+
+# from massmarket_client.legacy_client import RelayClient
+from massmarket_client import RelayClientProtocol
+from massmarket_client.utils import new_object_id
 import copy
+from tests.conftest import MakeClientCallable
 
 
 def now():
@@ -29,7 +33,7 @@ def new_uint256(i):
     return mbase.Uint256(value=i)
 
 
-def prepare_order(c: RelayClient):
+def prepare_order(c: RelayClientProtocol):
     assert c.shop is not None, "shop not initialized"
     # a1 writes an a few events
     iid1 = c.create_listing("sneakers", int(0.001 * 10**18))  # 0.001 ETH
@@ -51,11 +55,10 @@ def prepare_order(c: RelayClient):
     assert c.errors == 0
 
     order = c.shop.orders.get(oid)
-    assert order is not None
     for _ in range(10):
         c.handle_all()
         order = c.shop.orders.get(oid)
-        if len(order.items) == 2:
+        if order is not None and len(order.items) == 2:
             break
     else:
         raise Exception("Timed out waiting for order items")
@@ -67,7 +70,7 @@ def prepare_order(c: RelayClient):
     return oid, iid1, iid2
 
 
-def wait_for_finalization(c: RelayClient, order_id: int):
+def wait_for_finalization(c: RelayClientProtocol, order_id: int):
     assert c.shop is not None, "shop not initialized"
     for _ in range(5):
         c.handle_all()
@@ -83,7 +86,7 @@ def wait_for_finalization(c: RelayClient, order_id: int):
     raise Exception(f"order not finalized in time")
 
 
-def wait_for_order_paid(c: RelayClient, oid: int, items, ping=None, retry=15):
+def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retry=15):
     assert c.shop is not None, "shop not initialized"
     # wait for payment to be processed
     for _ in range(retry):
@@ -138,7 +141,7 @@ shipping = mbase.PriceModifier(
 
 region_tax_and_ship = mbase.ShippingRegion(
     country=default_addr.country,
-    postal_code=default_addr.postal_code,
+    postal_code=default_addr.postal_code or "",
     city=default_addr.city,
     price_modifiers={
         "tax-and-ship": tax_code,
@@ -148,8 +151,8 @@ region_tax_and_ship = mbase.ShippingRegion(
 
 
 # this is some helper code to create a bunch of unpayed orders for a relay refactor
-def test_orders_unpayed(make_client):
-    alice: RelayClient = make_client("alice")
+def test_orders_unpayed(make_client: MakeClientCallable):
+    alice: RelayClientProtocol = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -186,8 +189,8 @@ def test_orders_unpayed(make_client):
         print(f"finalized erc20 order {oid}")
 
 
-def test_orders_no_currency(make_client):
-    alice: RelayClient = make_client("alice")
+def test_orders_no_currency(make_client: MakeClientCallable):
+    alice: RelayClientProtocol = make_client("alice")
     shop_id = alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -221,8 +224,8 @@ def test_orders_no_currency(make_client):
     assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
 
 
-def test_orders_nonexistent_items(make_client):
-    alice: RelayClient = make_client("alice")
+def test_orders_nonexistent_items(make_client: MakeClientCallable):
+    alice: RelayClientProtocol = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -272,8 +275,8 @@ def test_orders_nonexistent_items(make_client):
     assert order.items[0].listing_id == valid_iid
 
 
-def test_orders_no_matching_region(make_client):
-    alice: RelayClient = make_client("alice")
+def test_orders_no_matching_region(make_client: MakeClientCallable):
+    alice: RelayClientProtocol = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -314,8 +317,8 @@ def test_orders_no_matching_region(make_client):
     assert alice.errors == 1
 
 
-def test_orders_shipping_costs(make_client):
-    alice: RelayClient = make_client("alice")
+def test_orders_shipping_costs(make_client: MakeClientCallable):
+    alice: RelayClientProtocol = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -355,8 +358,8 @@ def test_orders_shipping_costs(make_client):
     assert total == 36600 or total == 36500  # = (300 * 1.2 + 5) * 100
 
 
-def test_orders_shipping_address(make_client):
-    alice: RelayClient = make_client("alice")
+def test_orders_shipping_address(make_client: MakeClientCallable):
+    alice: RelayClientProtocol = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -399,13 +402,14 @@ def test_orders_shipping_address(make_client):
         assert alice.last_error is not None
 
 
-def test_clerk_check_shipping_region(make_client: Callable[[str], RelayClient]):
+def test_clerk_check_shipping_region(make_client: MakeClientCallable):
     a = make_client("alice")
     a.register_shop()
     a.enroll_key_card()
     a.login()
     a.create_shop_manifest()
     assert a.errors == 0
+    assert a.shop is not None
 
     # Verify no shipping regions initially
     a.update_shop_manifest(remove_region="default")
@@ -475,8 +479,8 @@ def test_clerk_check_shipping_region(make_client: Callable[[str], RelayClient]):
 
 
 def test_orders_invalid(
-    make_two_clients: Tuple[RelayClient, RelayClient],
-    make_client: Callable[[str], RelayClient],
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_client: MakeClientCallable,
 ):
     a1, a2 = make_two_clients
     assert a1.shop is not None
@@ -697,7 +701,7 @@ def test_orders_happy_eth_byAddress(make_client):
     # assert afterPaid < afterSweep
 
 
-def test_orders_happy_erc20_byAddress(make_client: Callable[[str], RelayClient]):
+def test_orders_happy_erc20_byAddress(make_client: MakeClientCallable):
     alice = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
@@ -781,7 +785,7 @@ def test_orders_happy_erc20_byAddress(make_client: Callable[[str], RelayClient])
     assert afterPaid <= afterSweep
 
 
-def test_orders_happy_erc20_byCall(make_client):
+def test_orders_happy_erc20_byCall(make_client: MakeClientCallable):
     alice = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
@@ -845,7 +849,7 @@ def test_orders_happy_erc20_byCall(make_client):
     assert afterPaid == beforePaid
 
 
-def test_orders_choose_payment_twice(make_client):
+def test_orders_choose_payment_twice(make_client: MakeClientCallable):
     alice = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
@@ -884,7 +888,9 @@ def test_orders_choose_payment_twice(make_client):
     assert alice.errors == 0
 
 
-def test_orders_item_locking(make_two_clients: Tuple[RelayClient, RelayClient]):
+def test_orders_item_locking(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
     alice, bob = make_two_clients
 
     # we only have three caps in inventory, let's create two orders with 2 each
@@ -960,7 +966,9 @@ def test_orders_item_locking(make_two_clients: Tuple[RelayClient, RelayClient]):
     assert bob.errors == 0
 
 
-def test_orders_variations_simple(make_two_clients: Tuple[RelayClient, RelayClient]):
+def test_orders_variations_simple(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
     alice, bob = make_two_clients
 
     # we only have three caps in inventory, let's create two orders with 2 each
@@ -1021,7 +1029,9 @@ def test_orders_variations_simple(make_two_clients: Tuple[RelayClient, RelayClie
 
 
 # TODO: fix go patcher logic for canceling an item
-def skip_test_orders_variations_cancel_on_remove(make_two_clients):
+def skip_test_orders_variations_cancel_on_remove(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
     alice, bob = make_two_clients
 
     # we only have three caps in inventory, let's create two orders with 2 each
@@ -1074,7 +1084,9 @@ def skip_test_orders_variations_cancel_on_remove(make_two_clients):
 
 
 def test_order_not_committed(
-    make_two_guests: Tuple[RelayClient, RelayClient, RelayClient],
+    make_two_guests: Tuple[
+        RelayClientProtocol, RelayClientProtocol, RelayClientProtocol
+    ],
 ):
     clerk, guest1, guest2 = make_two_guests
 
@@ -1130,7 +1142,7 @@ def test_order_not_committed(
 
 
 def test_orders_item_locking_with_removal(
-    make_two_clients: Tuple[RelayClient, RelayClient],
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
 ):
     alice, bob = make_two_clients
 

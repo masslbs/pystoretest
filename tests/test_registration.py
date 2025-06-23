@@ -4,7 +4,7 @@
 
 import os
 
-from client import RelayClient
+from massmarket_client.legacy_client import RelayClient
 
 
 def test_create_shop_manifest(wc_auth: RelayClient):
