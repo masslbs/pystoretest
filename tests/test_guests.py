@@ -10,6 +10,7 @@ import requests
 import cbor2
 import pytest
 from typing import Callable, Tuple
+from urllib.parse import urlparse
 from eth_keys.datatypes import PrivateKey
 from web3.exceptions import ContractCustomError
 
@@ -23,10 +24,17 @@ import massmarket.cbor.order as morder
 import massmarket.cbor.manifest as mmanifest
 import massmarket.cbor.patch as mpatch
 
-from client import RelayClient, new_object_id, RelayException
-import objfactory
+from massmarket_client.legacy_client import (
+    RelayClient,
+)  # TODO: refactor to RelayClientFactory(?)
+from massmarket_client.utils import new_object_id, RelayException
 
-from test_orders import wait_for_finalization
+# from massmarket_client.client import RefactoredRelayClient
+from massmarket_client import RelayClientProtocol
+from tests.conftest import MakeClientCallable
+from tests import objfactory
+
+from tests.test_orders import wait_for_finalization
 
 
 def check_seed_data_path(seed_data_path: str | None, read_only: bool = False) -> None:
@@ -50,9 +58,9 @@ def check_seed_data_path(seed_data_path: str | None, read_only: bool = False) ->
         return
 
     # Check if directory is writable
+    parent_dir = path.parent
+    test_file = parent_dir / f"test_{path.name}"
     try:
-        parent_dir = path.parent
-        test_file = parent_dir / f"test_{path.name}"
         test_file.touch()
         test_file.unlink()
     except (OSError, PermissionError):
@@ -60,7 +68,7 @@ def check_seed_data_path(seed_data_path: str | None, read_only: bool = False) ->
         return
 
 
-def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
+def test_make_hydration_data(make_client: MakeClientCallable):
     """
     Creates a shop with listings, inventory, and orders, then returns the shop owner client
     and a dictionary containing all the relevant IDs and keys for testing.
@@ -69,8 +77,10 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     """
 
     # Create the shop owner
-    owner: RelayClient = make_client(
-        "shop_owner", private_key=os.getenv("ETH_PRIVATE_KEY")
+    eth_private_key = os.getenv("ETH_PRIVATE_KEY")
+    private_key_bytes = bytes.fromhex(eth_private_key) if eth_private_key else None
+    owner: RelayClientProtocol = make_client(
+        "shop_owner", private_key=private_key_bytes
     )
 
     # Check if shop already exists
@@ -82,7 +92,11 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
                 f"Shop {shop_token_id} already exists, owned by {existing_owner}"
             )
     except ContractCustomError as ex:
-        if ex.data != "0xceea21b6":  # token doesnt exist
+        # ERC721NonexistentToken(uint256)
+        if (
+            ex.data
+            != "0x7e2732890000000000000000000000000000000000000000000000000000000000001234"
+        ):
             raise ex
 
         # NFT doesn't exist, but check if shop data exists in relay
@@ -91,7 +105,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         print(
             f"NFT {shop_token_id} doesn't exist, checking if shop data exists in relay..."
         )
-        test_client: RelayClient = make_client(
+        test_client: RelayClientProtocol = make_client(
             "test_checker", private_key=os.urandom(32), validate_patches=False
         )
         test_client.shop_token_id = shop_token_id
@@ -123,7 +137,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
                     break
                 timeout -= 1
 
-            if received_listings:
+            if received_listings and test_client.shop is not None:
                 print(
                     f"Shop data exists in relay with {test_client.shop.listings.size} listings. Just recreating NFT..."
                 )
@@ -165,13 +179,13 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
 
     shop_metadata = {
         "name": "Test HTTP Cat Shop",
-        "description": "Test HTTP Cat Shop Description", 
+        "description": "Test HTTP Cat Shop Description",
         "image": "https://http.cat/images/202.jpg",
     }
 
     metadata_json = json.dumps(shop_metadata)
-    metadata_blob = metadata_json.encode('utf-8')
-    metadata_file = ('file', ('metadata.json', metadata_blob, 'application/json'))
+    metadata_blob = metadata_json.encode("utf-8")
+    metadata_file = ("file", ("metadata.json", metadata_blob, "application/json"))
 
     upload_response = requests.post(pb_resp["url"], files=[metadata_file])
     assert upload_response.status_code == 201
@@ -179,7 +193,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
 
     assert "url" in upload_json
     try:
-        url_parts = requests.utils.urlparse(upload_json["url"])
+        url_parts = urlparse(upload_json["url"])
         assert all([url_parts.scheme, url_parts.netloc]), "Invalid URL format"
     except Exception as e:
         pytest.fail(f"Invalid URL: {upload_json['url']} - {str(e)}")
@@ -222,7 +236,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     assert owner.errors == 0
 
     # Create a customer one and place some orders
-    cust1: RelayClient = make_client(
+    cust1: RelayClientProtocol = make_client(
         "customer1", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     cust1.enroll_key_card()
@@ -256,7 +270,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
     assert cust1.errors == 0
 
     # Create a second customer and have them place an order
-    cust2: RelayClient = make_client(
+    cust2: RelayClientProtocol = make_client(
         "customer2", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     cust2.enroll_key_card()
@@ -271,6 +285,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
 
     owner.handle_all()
     assert owner.errors == 0
+    assert owner.shop is not None
 
     # Collect all the relevant data
     test_data = {
@@ -298,9 +313,7 @@ def test_make_hydration_data(make_client: Callable[[str], RelayClient]):
         "listing_ids": listing_ids,
     }
 
-    with open(seed_data_path, "wb") as f:
-        import cbor2
-
+    with open(seed_data_path, "wb") as f:  # type: ignore
         cbor2.dump(test_data, f)
 
     # Close customer and guest connections
@@ -317,6 +330,10 @@ def test_shop_hydration_from_seed(make_client):
     check_seed_data_path(seed_data_path, read_only=True)
 
     # Load the test data from CBOR
+    if seed_data_path is None:
+        pytest.skip("TEST_MAKE_HYDRATION_DATA is not set")
+        return
+
     with open(seed_data_path, "rb") as f:
         test_data = cbor2.load(f)
 
@@ -361,8 +378,13 @@ def test_shop_hydration_from_seed(make_client):
     assert customer.errors == 0
     customer.handle_all()
     assert customer.errors == 0
+    assert customer.shop is not None
 
     # Verify customer orders
+    owner.handle_all()
+    assert owner.errors == 0
+    assert owner.shop is not None
+
     for order_id in customer1_order_ids:
         assert owner.shop.orders.has(
             order_id
@@ -383,6 +405,9 @@ def test_shop_hydration_from_seed(make_client):
     guest.login(subscribe=False)
     guest.subscribe(filters=[])
     assert guest.errors == 0
+    guest.handle_all()
+    assert guest.errors == 0
+    assert guest.shop is not None
 
     # Verify guest order
     guest_order_id = customer2_order_ids[0]
@@ -438,7 +463,7 @@ def test_guest_subscribe_to_inventory_fails(make_client):
 
 def test_guest_subscribe_before_auth(make_client):
     # create the owner/clerk
-    charlie = make_client("charlie")
+    charlie: RelayClientProtocol = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -446,7 +471,9 @@ def test_guest_subscribe_before_auth(make_client):
     assert charlie.errors == 0
 
     # create a guest without a keycard
-    guest = make_client("guest", shop=shop_id, guest=True, private_key=os.urandom(32))
+    guest: RelayClientProtocol = make_client(
+        "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
+    )
     guest.connect()
     guest.subscribe_visitor()
     guest.handle_all()
@@ -459,12 +486,13 @@ def test_guest_subscribe_before_auth(make_client):
 
     # fetch the listing
     guest.handle_all()
+    assert guest.shop is not None
     assert guest.shop.listings.has(id)
 
 
 def test_guest_subscribe_to_accounts(make_client):
     # create the owner/clerk
-    clerk = make_client("clerk")
+    clerk: RelayClientProtocol = make_client("clerk")
     shop_id = clerk.register_shop()
     clerk.enroll_key_card()
     clerk.login()
@@ -494,6 +522,7 @@ def test_guest_subscribe_to_accounts(make_client):
     clerk.handle_all()
     assert len(guest.all_key_cards) == 2
     assert len(clerk.all_key_cards) == 2
+    assert clerk.shop is not None
     guest_account = clerk.shop.accounts.get(bytes(20))
     assert guest_account is not None
     guests_keycard_public_key = (
@@ -505,8 +534,7 @@ def test_guest_subscribe_to_accounts(make_client):
 
 def test_guest_subscribe_orders_needs_auth(make_client):
     # create the owner/clerk
-    charlie = make_client("charlie")
-    assert isinstance(charlie, RelayClient)
+    charlie: RelayClientProtocol = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -514,9 +542,10 @@ def test_guest_subscribe_orders_needs_auth(make_client):
     assert charlie.errors == 0
 
     # create a guest without a keycard
-    guest = make_client("guest", shop=shop_id, guest=True, private_key=os.urandom(32))
+    guest: RelayClientProtocol = make_client(
+        "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
+    )
     guest.connect()
-    assert isinstance(guest, RelayClient)
     assert guest.errors == 0
 
     # make sure we cant subscribe to orders yet
@@ -538,7 +567,9 @@ def test_guest_subscribe_orders_needs_auth(make_client):
 
 
 def test_guest_user_create_order(
-    make_two_guests: Tuple[RelayClient, RelayClient, RelayClient],
+    make_two_guests: Tuple[
+        RelayClientProtocol, RelayClientProtocol, RelayClientProtocol
+    ],
 ):
     clerk, guest1, guest2 = make_two_guests
     assert guest1.shop is not None
@@ -565,7 +596,9 @@ def test_guest_user_create_order(
 
 
 def test_guest_commit_other_users_order(
-    make_two_guests: Tuple[RelayClient, RelayClient, RelayClient],
+    make_two_guests: Tuple[
+        RelayClientProtocol, RelayClientProtocol, RelayClientProtocol
+    ],
 ):
     clerk, guest1, guest2 = make_two_guests
 
@@ -605,6 +638,8 @@ def test_guest_commit_other_users_order(
     assert guest1.errors == 0
 
     order = wait_for_finalization(guest1, order1)
+    assert order is not None
+    assert order.payment_details is not None
     int_total = int(order.payment_details.total)
     assert int_total == 2
     # order has payment details
@@ -633,7 +668,6 @@ def test_guest_commit_other_users_order(
 
 def test_guest_cannot_create_listing(make_two_guests):
     _, guest1, _ = make_two_guests
-    assert isinstance(guest1, RelayClient)
     assert guest1.shop is not None
 
     guest1.expect_error = True
@@ -682,7 +716,6 @@ def test_guest_cannot_create_or_update_tag(make_two_guests):
 
 def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
     _, guest1, _ = make_two_guests
-    assert isinstance(guest1, RelayClient)
     assert guest1.shop is not None
 
     guest1.expect_error = True
@@ -728,8 +761,7 @@ def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
 
 def test_guest_subscribe_empty_filter_no_private_data(make_client):
     # create the owner/clerk
-    charlie = make_client("charlie")
-    assert isinstance(charlie, RelayClient)
+    charlie: RelayClientProtocol = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -744,7 +776,7 @@ def test_guest_subscribe_empty_filter_no_private_data(make_client):
     charlie.close()
 
     # Create another customer and place an order
-    customer: RelayClient = make_client(
+    customer: RelayClientProtocol = make_client(
         "customer", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     customer.enroll_key_card()
@@ -763,18 +795,18 @@ def test_guest_subscribe_empty_filter_no_private_data(make_client):
     customer.close()
 
     # create a guest without a keycard
-    guest: RelayClient = make_client(
+    guest: RelayClientProtocol = make_client(
         "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     guest.debug = True
     guest.connect()
-    assert isinstance(guest, RelayClient)
 
     # Subscribe with empty filter
     guest.subscribe(filters=[])
     assert guest.errors == 0
     guest.handle_all()
     assert guest.errors == 0
+    assert guest.shop is not None
 
     # Verify the guest can't see private inventory details
     assert guest.shop.listings.has(id)

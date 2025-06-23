@@ -20,7 +20,12 @@ import massmarket.cbor.patch as mpatch
 import massmarket.cbor.base_types as mbase
 import massmarket.cbor.listing as mlisting
 import massmarket.cbor.order as morder
-from client import RelayClient, RelayException, new_object_id, vid
+from massmarket_client.legacy_client import RelayClient
+from massmarket_client.utils import RelayException
+from massmarket_client.utils import new_object_id, vid
+from massmarket_client import RelayClientProtocol
+from tests.conftest import MakeClientCallable
+from massmarket_client import RelayClientProtocol
 
 
 def test_helper_vid():
@@ -31,7 +36,7 @@ def test_helper_vid():
     assert vid(1, ["3", "2"]) == "1:2:3:"
 
 
-def test_event_nonce_collision(wc_auth: RelayClient):
+def test_event_nonce_collision(wc_auth: RelayClientProtocol):
     wc_auth.create_shop_manifest()
     assert wc_auth.errors == 0
 
@@ -70,7 +75,7 @@ def test_event_nonce_collision(wc_auth: RelayClient):
     wc_auth.close()
 
 
-def test_clerk_update_shop_manifest(wc_auth: RelayClient):
+def test_clerk_update_shop_manifest(wc_auth: RelayClientProtocol):
     wc_auth.create_shop_manifest()
     wc_auth.debug = True
     assert wc_auth.errors == 0
@@ -101,7 +106,9 @@ def test_clerk_update_shop_manifest(wc_auth: RelayClient):
     wc_auth.close()
 
 
-def test_clerk_sync_shop_manifest(make_two_clients: Tuple[RelayClient, RelayClient]):
+def test_clerk_sync_shop_manifest(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
     a1, a2 = make_two_clients
     assert a1.shop is not None
     assert a2.shop is not None
@@ -125,7 +132,7 @@ def test_clerk_sync_shop_manifest(make_two_clients: Tuple[RelayClient, RelayClie
     assert len(a2.shop.manifest.payees[a1.chain_id]) == 2
 
 
-def test_clerk_write_and_sync_later(make_client: Callable[[str], RelayClient]):
+def test_clerk_write_and_sync_later(make_client: MakeClientCallable):
     # both alices share the same private wallet but have different keycards
     a1 = make_client("alice.1")
     shop_id = a1.register_shop()
@@ -159,7 +166,7 @@ def test_clerk_write_and_sync_later(make_client: Callable[[str], RelayClient]):
 
 
 # TODO: rethink this. Now the manifest creates the initial manifest.
-def skip_test_clerk_manifest_first(make_client: Callable[[str], RelayClient]):
+def skip_test_clerk_manifest_first(make_client: MakeClientCallable):
     a1 = make_client("alice.1")
     a1.register_shop()
     a1.enroll_key_card()
@@ -202,7 +209,7 @@ def skip_test_clerk_manifest_first(make_client: Callable[[str], RelayClient]):
     assert a1.errors == 0
 
 
-def test_accounts_mirror(make_client: Callable[[str], RelayClient]):
+def test_accounts_mirror(make_client: MakeClientCallable):
     a = make_client("alice")
     a.register_shop()
     a.enroll_key_card()
@@ -246,7 +253,9 @@ def test_accounts_mirror(make_client: Callable[[str], RelayClient]):
     assert len(a.accounts) == 1
 
 
-def test_subscription_management(make_two_clients: Tuple[RelayClient, RelayClient]):
+def test_subscription_management(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
     a, b = make_two_clients
 
     # b only cares about one specific listing
@@ -289,13 +298,14 @@ def test_subscription_management(make_two_clients: Tuple[RelayClient, RelayClien
     assert b.shop.listings.size == 1
 
 
-def test_clerk_create_and_update_listing(make_client: Callable[[str], RelayClient]):
+def test_clerk_create_and_update_listing(make_client: MakeClientCallable):
     a1 = make_client("alice.1")
     shop_id = a1.register_shop()
     a1.enroll_key_card()
     a1.login()
     a1.handle_all()
     assert a1.errors == 0
+    assert a1.shop is not None
 
     # a1 writes a few events
     a1.create_shop_manifest()
@@ -356,9 +366,9 @@ def test_clerk_create_and_update_listing(make_client: Callable[[str], RelayClien
     # TODO: add tests with too large metadata strings
 
 
-def test_batch_update_listing(make_client):
+def test_batch_update_listing(make_client: MakeClientCallable):
     # Create a client and set up shop
-    a: RelayClient = make_client("alice")
+    a = make_client("alice")
     a.register_shop()
     a.enroll_key_card()
     a.login()
@@ -424,7 +434,7 @@ def test_batch_update_listing(make_client):
     assert listing.price == 2200
 
 
-def test_clerk_update_listing_from_other_shop(make_client):
+def test_clerk_update_listing_from_other_shop(make_client: MakeClientCallable):
     alice = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
@@ -450,7 +460,7 @@ def test_clerk_update_listing_from_other_shop(make_client):
     assert bob.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
 
-def test_clerk_same_ids_with_other_shop(make_client):
+def test_clerk_same_ids_with_other_shop(make_client: MakeClientCallable):
     alice = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
@@ -475,7 +485,9 @@ def test_clerk_same_ids_with_other_shop(make_client):
     assert bob.errors == 0
 
 
-def test_clerk_create_and_edit_tag(make_two_clients: Tuple[RelayClient, RelayClient]):
+def test_clerk_create_and_edit_tag(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
     a1, a2 = make_two_clients
 
     # a1 writes an a few events
@@ -959,7 +971,7 @@ def test_invalid_change_stock_of_non_existent_variation(make_two_clients):
 
 
 def test_cannot_add_unpublished_item_to_order(
-    make_client: Callable[[str], RelayClient],
+    make_client: MakeClientCallable,
 ):
     # Create client and setup
     client = make_client("alice")
@@ -969,6 +981,7 @@ def test_cannot_add_unpublished_item_to_order(
     client.handle_all()
     client.create_shop_manifest()
     assert client.errors == 0
+    assert client.shop is not None
 
     # Create an unpublished listing
     listing_id = client.create_listing(

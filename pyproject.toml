@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2025 Mass Labs
+#
+# SPDX-License-Identifier: MIT
+
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "massmarket-client"
+dynamic = ["version"]
+description = "Python client for interacting with Mass Market relay services"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "Mass Labs", email = "info@masslabs.xyz"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "massmarket",  # from network-schema flake - provides web3, protobuf, cbor2, pydantic
+    "safe-pysha3",
+    "humanize",
+    "filelock",
+    "siwe>=4.4.0",
+    "abnf>=2.2.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-timeout",
+    "pytest-xdist", 
+    "pytest-repeat",
+    "pytest-random-order",
+    "pytest-benchmark",
+    "factory-boy",
+]
+
+[project.urls]
+Homepage = "https://github.com/masslbs/pystoretest"
+Repository = "https://github.com/masslbs/pystoretest"
+
+[tool.setuptools]
+packages = ["massmarket_client"]
+
+[tool.setuptools_scm]
+version_scheme = "post-release"
+local_scheme = "dirty-tag" 

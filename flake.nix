@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: 2025 Mass Labs
 #
 # SPDX-License-Identifier: MIT
+
 {
   description = "Mass Market Relay Testing";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    contracts.url = "github:masslbs/contracts/stage0";
+    contracts.url = "github:masslbs/contracts";
+    network-schema.url = "github:masslbs/network-schema";
   };
 
   outputs = {
@@ -15,26 +17,102 @@
     nixpkgs,
     flake-utils,
     contracts,
+    network-schema,
   }:
     flake-utils.lib.eachDefaultSystem
     (
       system: let
         pkgs = nixpkgs.legacyPackages.${system};
-        mass-python = import ./pythonenv.nix {
-          inherit pkgs;
-        };
+        # Use the mass-python from network-schema as base and add extra packages
+        base-python = network-schema.packages.${system}.mass-python;
         contracts_abi = contracts.packages.${system}.default;
-      in {
-        devShells.default = pkgs.mkShell {
-          buildInputs = [mass-python pkgs.pyright pkgs.black pkgs.alejandra];
-          shellHook = ''
-            export $(egrep -v '^#' .env | xargs)
-            export PYTHON=${mass-python}/bin/python
-            export MASS_CONTRACTS=${contracts_abi}
-          '';
+
+        # Build extra packages for massmarket-client (only ones not already in massmarket)
+        extraPackages = with base-python.pkgs; 
+          let
+            abnf = buildPythonPackage rec {
+              pname = "abnf";
+              version = "2.2.0";
+              format = "pyproject";
+              src = fetchPypi {
+                inherit pname version;
+                hash = "sha256-QzOA/TKFW7xgvHs9NdQGFuITg6Mu0cm4iT0W2fSmwvQ";
+              };
+              buildInputs = [ setuptools setuptools-scm ];
+            };
+
+            siwe = buildPythonPackage rec {
+              pname = "siwe";
+              version = "4.4.0"; 
+              format = "pyproject";
+              src = fetchPypi {
+                inherit pname version;
+                hash = "sha256-X9+EMlOpHXgIXx2hHtfJaVu7dD4RLaZY5jooXd8//sc";
+              };
+              buildInputs = [ web3 ];
+              propagatedBuildInputs = [ poetry-core pydantic abnf ] ++ [ pkgs.protobuf ];
+            };
+          in [
+            abnf
+            siwe
+            safe-pysha3
+            humanize
+            filelock
+          ];
+
+        # Python package derivation for massmarket-client
+        massmarket-client-python = base-python.pkgs.buildPythonPackage rec {
+          pname = "massmarket-client";
+          version = "1.0.0";
+          format = "pyproject";
+          src = ./.;
+          
+          nativeBuildInputs = with base-python.pkgs; [ setuptools setuptools-scm ];
+          propagatedBuildInputs = with base-python.pkgs; [ 
+            network-schema.packages.${system}.massmarket-python
+          ] ++ extraPackages;
+          
+          SETUPTOOLS_SCM_PRETEND_VERSION = version;
+          
+          pythonImportsCheck = [ "massmarket_client" ];
+          nativeCheckInputs = with base-python.pkgs; [ 
+            pytest 
+            pytest-timeout
+            pytest-xdist
+            pytest-repeat
+            pytest-random-order
+            pytest-benchmark
+            factory-boy
+          ];
+          
+          # Skip tests during build - they require external services
+          doCheck = false;
+          
+          meta = with pkgs.lib; {
+            description = "Python client for interacting with Mass Market relay services";
+            license = licenses.mit;
+          };
         };
 
-        packages.default = pkgs.stdenv.mkDerivation {
+        # Create enhanced Python environment with massmarket-client included
+        enhanced-python = base-python.withPackages (ps: [
+          massmarket-client-python
+          ps.pytest
+          ps.pytest-timeout
+          ps.pytest-xdist
+          ps.pytest-repeat
+          ps.pytest-random-order
+          ps.pytest-benchmark
+          ps.factory-boy
+          # Packaging tools
+          ps.build
+          ps.twine
+          ps.setuptools
+          ps.setuptools-scm
+          ps.wheel
+        ] ++ extraPackages);
+
+        pystoretest = pkgs.stdenv.mkDerivation {
           name = "pystoretest";
           src = ./.;
 
@@ -59,10 +137,26 @@
             cp $out/tests/*.py \$rundir/
             cp $out/tests/testcats.md \$rundir/
             cd \$rundir
-            exec ${mass-python}/bin/pytest "\$@"
+            exec ${enhanced-python}/bin/pytest "\$@"
             EOF
             chmod +x $out/bin/pystoretest
           '';
+        };
+      in {
+        devShells.default = pkgs.mkShell {
+          buildInputs = [enhanced-python pkgs.pyright pkgs.black pkgs.alejandra];
+          shellHook = ''
+            export $(egrep -v '^#' .env | xargs)
+            export PYTHON=${enhanced-python}/bin/python
+            export MASS_CONTRACTS=${contracts_abi}
+          '';
+        };
+
+        packages = {
+          default = massmarket-client-python;
+          massmarket-client-python = massmarket-client-python;
+          enhanced-python = enhanced-python;  # Expose the Python environment
+          pystoretest = pystoretest;  # Keep the test runner for backwards compatibility
         };
       }
     );

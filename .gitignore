@@ -9,3 +9,10 @@
 .vscode
 .pytest_cache
 __pycache__
+.testruns
+result
+patch_logs
+shop_data
+massmarket_client.egg-info
+dist
+shop_hydration_data.cbor
