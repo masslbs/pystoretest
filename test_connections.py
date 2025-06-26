@@ -201,8 +201,11 @@ def test_cant_connect_twice_with_same_keycard(make_client):
     with pytest.raises(RelayException, match=expect):
         a2.login(subscribe=False)
     assert a2.logged_in == False
-    a1.close()
-    a2.close()
+
+    # Verify a1 still works after failed a2 login attempt
+    a1.handle_all()
+    assert a1.logged_in == True
+    assert a1.connected == True
 
 
 def test_clerk_blob_upload(wc_auth: RelayClient):
