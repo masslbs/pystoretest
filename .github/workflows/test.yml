@@ -32,3 +32,6 @@ jobs:
           print(f'✅ LegacyRelayClient: {LegacyRelayClient}') 
           print(f'✅ RefactoredRelayClient: {RefactoredRelayClient}')
           "
+
+      - name: Build and validate testrunner
+        run: nix build .#pystoretest
