@@ -16,3 +16,4 @@ shop_data
 massmarket_client.egg-info
 dist
 shop_hydration_data.cbor
+cola

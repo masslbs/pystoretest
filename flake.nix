@@ -144,7 +144,7 @@
         };
       in {
         devShells.default = pkgs.mkShell {
-          buildInputs = [enhanced-python pkgs.pyright pkgs.black pkgs.alejandra];
+          buildInputs = [enhanced-python pkgs.pyright pkgs.black pkgs.alejandra pkgs.reuse];
           shellHook = ''
             export $(egrep -v '^#' .env | xargs)
             export PYTHON=${enhanced-python}/bin/python

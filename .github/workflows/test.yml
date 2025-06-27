@@ -11,19 +11,24 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: pystoretest
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - uses: DeterminateSystems/flake-checker-action@main
 
-      - uses: actions/checkout@v4
-        with:
-          repository: masslbs/network-schema
-          path: network-schema
+      - name: Check linting
+        run: nix develop -c make lint
 
       - name: Client import check
-        run: nix develop -c python -c "from client import RelayClient"
-        working-directory: pystoretest
+        run: |
+          nix develop -c python -c "
+          # Test main client imports
+          from massmarket_client import RelayClientProtocol
+          from massmarket_client.legacy_client import RelayClient as LegacyRelayClient
+          from massmarket_client.client import RefactoredRelayClient
+
+          
+          print('✅ All client imports successful')
+          print(f'✅ RelayClientProtocol: {RelayClientProtocol}')
+          print(f'✅ LegacyRelayClient: {LegacyRelayClient}') 
+          print(f'✅ RefactoredRelayClient: {RefactoredRelayClient}')
+          "
