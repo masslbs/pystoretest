@@ -95,33 +95,34 @@
         };
 
         # Create enhanced Python environment with massmarket-client included
-        enhanced-python = base-python.withPackages (ps: [
-          massmarket-client-python
-          ps.pytest
-          ps.pytest-timeout
-          ps.pytest-xdist
-          ps.pytest-repeat
-          ps.pytest-random-order
-          ps.pytest-benchmark
-          ps.factory-boy
+        enhanced-python = base-python.withPackages (ps: with ps; [
+          pytest
+          pytest-timeout
+          pytest-xdist
+          pytest-repeat
+          pytest-random-order
+          pytest-benchmark
+          factory-boy
           # Packaging tools
-          ps.build
-          ps.twine
-          ps.setuptools
-          ps.setuptools-scm
-          ps.wheel
-        ] ++ extraPackages);
+          build
+          twine
+          setuptools
+          setuptools-scm
+          wheel
+        ] ++ extraPackages ++ [massmarket-client-python]);
 
         pystoretest = pkgs.stdenv.mkDerivation {
           name = "pystoretest";
           src = ./.;
 
           dontBuild = true;
+          
+          nativeCheckInputs = [ enhanced-python ];
 
           installPhase = ''
             mkdir -p $out/{tests,bin}
 
-            cp *.py $out/tests/
+            cp tests/*.py $out/tests/
             cp testcats.md $out/tests/
 
             # this is a bit of a hack
@@ -134,13 +135,48 @@
             set -e
             export MASS_CONTRACTS=${contracts_abi}
             rundir=\$(mktemp -d /tmp/pystoretest.XXXXXX)
-            cp $out/tests/*.py \$rundir/
-            cp $out/tests/testcats.md \$rundir/
+            mkdir -p \$rundir/tests
+            cp $out/tests/*.py \$rundir/tests/
+            cp $out/tests/testcats.md \$rundir/tests/
             cd \$rundir
             exec ${enhanced-python}/bin/pytest "\$@"
             EOF
             chmod +x $out/bin/pystoretest
           '';
+          
+          installCheckPhase = ''
+            echo "🔍 Validating testrunner can discover tests..."
+            
+            # Test the actual installed testrunner script
+            echo "Running installed testrunner with --collect-only..."
+            output=$($out/bin/pystoretest --collect-only -q 2>&1)
+            
+            # Check that tests were collected
+            if echo "$output" | grep -q "tests collected"; then
+              test_count=$(echo "$output" | grep "tests collected" | sed 's/.*\([0-9]*\) tests collected.*/\1/')
+              echo "✅ Found $test_count tests"
+            else
+              echo "❌ No tests collected - output was:"
+              echo "$output"
+              exit 1
+            fi
+            
+            # Verify specific test files are discovered
+            expected_tests=("test_events.py" "test_currencies.py" "test_guests.py" "test_orders.py" "test_persistence.py" "test_registration.py" "test_benchmark.py" "test_compatibility.py" "test_connections.py")
+            
+            for test_file in "''${expected_tests[@]}"; do
+              if echo "$output" | grep -q "$test_file"; then
+                echo "✅ Found $test_file"
+              else
+                echo "❌ Missing $test_file in test discovery"
+                exit 1
+              fi
+            done
+            
+            echo "✅ Testrunner validation successful - all expected tests discovered"
+          '';
+          
+          doInstallCheck = true;
         };
       in {
         devShells.default = pkgs.mkShell {
