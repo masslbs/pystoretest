@@ -105,7 +105,7 @@ def transact_with_retry(w3, account, contract_call, max_attempts=3):
             continue
 
 
-def check_transaction(w3, tx, max_retries=10, initial_delay=0.5):
+def check_transaction(w3, tx, max_retries=5, initial_delay=0.5):
     """Check transaction status with retries."""
     for attempt in range(max_retries):
         try:
