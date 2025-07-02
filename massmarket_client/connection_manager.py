@@ -39,7 +39,7 @@ class ConnectionManager:
         self.relay_addr = relay_addr
 
         # Construct WebSocket endpoint
-        relay_ws_endpoint = relay_addr._replace(path="/v4/sessions")
+        relay_ws_endpoint = relay_addr._replace(path="/v5/sessions")
         if relay_addr.scheme == "http":
             relay_ws_endpoint = relay_ws_endpoint._replace(scheme="ws")
         elif relay_addr.scheme == "https":
@@ -358,7 +358,7 @@ class AuthenticationManager:
 
         key_card = PrivateKey(self.key_card_private_key)
 
-        modified_url = self.relay_addr._replace(path="/v4/enroll_key_card")
+        modified_url = self.relay_addr._replace(path="/v5/enroll_key_card")
         if self.is_guest:
             modified_url = modified_url._replace(query="guest=1")
         enroll_url = modified_url.geturl()
@@ -402,6 +402,9 @@ class AuthenticationManager:
             response = requests.post(
                 enroll_url, data=json_data, headers={"Origin": "localhost"}
             )
+
+            if response.status_code == 404:
+                raise Exception("enroll_keycard: endpoint returned 404")
 
             if response.status_code != 429:
                 break

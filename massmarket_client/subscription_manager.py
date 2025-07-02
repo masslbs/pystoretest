@@ -34,6 +34,7 @@ class SubscriptionManager:
             "OBJECT_TYPE_TAG",
             "OBJECT_TYPE_ACCOUNT",
             "OBJECT_TYPE_MANIFEST",
+            "OBJECT_TYPE_INVENTORY",
         ]
         filters = [
             subscription_pb2.SubscriptionRequest.Filter(object_type=t) for t in types
@@ -48,6 +49,7 @@ class SubscriptionManager:
             "OBJECT_TYPE_ACCOUNT",
             "OBJECT_TYPE_ORDER",
             "OBJECT_TYPE_MANIFEST",
+            "OBJECT_TYPE_INVENTORY",
         ]
         filters = [
             subscription_pb2.SubscriptionRequest.Filter(object_type=t) for t in types

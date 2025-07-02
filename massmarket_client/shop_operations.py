@@ -65,6 +65,7 @@ class ShopOperations:
                     city="",
                 )
             },
+            order_payment_timeout=3600000000000,
         )
         self.patch_manager.write_patch(
             obj=sm,
@@ -450,7 +451,7 @@ class ShopOperations:
         if self.state_manager and self.state_manager.get_shop().orders.has(oid):
             raise Exception(f"Order already exists: {oid}")
 
-        order = mass_order.Order(id=oid, items=[], state=mass_order.OrderState.OPEN)
+        order = mass_order.Order(id=oid, items=[], payment_state=mass_order.OrderPaymentState.OPEN)
         self.patch_manager.write_patch(
             type=mass_patch.ObjectType.ORDER,
             object_id=oid,
@@ -541,8 +542,8 @@ class ShopOperations:
             type=mass_patch.ObjectType.ORDER,
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
-            fields=["State"],
-            obj=mass_order.OrderState.CANCELED,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.CANCELED,
         )
 
         if not was_batching:
@@ -596,8 +597,8 @@ class ShopOperations:
             type=mass_patch.ObjectType.ORDER,
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
-            fields=["State"],
-            obj=mass_order.OrderState.COMMITTED,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.COMMITTED,
             wait=self.expect_error,
         )
 
@@ -640,8 +641,8 @@ class ShopOperations:
             type=mass_patch.ObjectType.ORDER,
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
-            fields=["State"],
-            obj=mass_order.OrderState.PAYMENT_CHOSEN,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.PAYMENT_CHOSEN,
         )
 
         if not was_batching_before:

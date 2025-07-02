@@ -523,8 +523,8 @@ class PatchHandler:
             assert len(patch.path.fields) > 0
             if order is None:
                 return notFoundError(f"unknown order: {order_id}")
-            if patch.path.fields[0] == "State":
-                order.state = patch.value
+            if patch.path.fields[0] == "PaymentState":
+                order.payment_state = patch.value
             elif patch.path.fields[0] == "Items":
                 if not isinstance(patch.value, list):
                     return invalidError(f"invalid items: {patch.value}")

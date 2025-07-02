@@ -78,7 +78,6 @@ class ShopPersistence:
 
     def _deserialize_shop_with_typed_objects(self, shop_dict: dict) -> Shop:
         """Deserialize shop with properly typed objects in HAMTs."""
-        from massmarket.cbor.manifest import Manifest
 
         # Deserialize basic shop structure
         shop = Shop(
@@ -291,10 +290,11 @@ class StateManager:
                     pricing_currency=None,
                     payees={},
                     shipping_regions={},
+                    order_payment_timeout=100000000000,
                 )
 
                 self.shop = Shop(
-                    schema_version=4,
+                    schema_version=5,
                     manifest=manifest,
                     accounts=Trie.new(),
                     listings=Trie.new(),
