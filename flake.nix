@@ -6,22 +6,35 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    systems.url = "github:nix-systems/default";
+    flake-parts.url = "github:hercules-ci/flake-parts";
     contracts.url = "github:masslbs/contracts";
     network-schema.url = "github:masslbs/network-schema/v5-dev";
+    pre-commit-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-    flake-utils,
+  outputs = inputs @ {
+    flake-parts,
+    systems,
     contracts,
     network-schema,
+    pre-commit-hooks,
+    ...
   }:
-    flake-utils.lib.eachDefaultSystem
-    (
-      system: let
-        pkgs = nixpkgs.legacyPackages.${system};
+    flake-parts.lib.mkFlake {inherit inputs;} {
+      systems = import systems;
+      imports = [
+        inputs.pre-commit-hooks.flakeModule
+      ];
+      perSystem = {
+        pkgs,
+        system,
+        config,
+        ...
+      }: let
         # Use the mass-python from network-schema as base and add extra packages
         base-python = network-schema.packages.${system}.mass-python;
         contracts_abi = contracts.packages.${system}.default;
@@ -182,9 +195,25 @@
           doInstallCheck = true;
         };
       in {
+        pre-commit = {
+          check.enable = true;
+          settings = {
+            src = ./.;
+            hooks = {
+              alejandra.enable = true;
+              typos.enable = true;
+              black.enable = true;
+              ruff.enable = true;
+            };
+          };
+        };
+
         devShells.default = pkgs.mkShell {
-          buildInputs = [enhanced-python pkgs.pyright pkgs.black pkgs.alejandra pkgs.reuse];
+          buildInputs =
+            [enhanced-python pkgs.pyright pkgs.black pkgs.alejandra pkgs.reuse pkgs.ruff]
+            ++ config.pre-commit.settings.enabledPackages;
           shellHook = ''
+            ${config.pre-commit.settings.installationScript}
             export $(egrep -v '^#' .env | xargs)
             export PYTHON=${enhanced-python}/bin/python
             export MASS_CONTRACTS=${contracts_abi}
@@ -197,6 +226,6 @@
           enhanced-python = enhanced-python; # Expose the Python environment
           pystoretest = pystoretest; # Keep the test runner for backwards compatibility
         };
-      }
-    );
+      };
+    };
 }
