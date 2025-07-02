@@ -437,30 +437,6 @@ def test_shop_hydration_from_seed(make_client):
     customer.close()
     guest.close()
 
-
-def test_guest_subscribe_to_inventory_fails(make_client):
-    # create the owner/clerk
-    charlie = make_client("charlie")
-    shop_id = charlie.register_shop()
-    charlie.enroll_key_card()
-    charlie.login()
-    charlie.create_shop_manifest()
-    assert charlie.errors == 0
-
-    # create a guest without a keycard
-    guest = make_client("guest1", shop=shop_id, guest=True, private_key=os.urandom(32))
-    guest.connect()
-    guest.expect_error = True
-    guest.subscribe(
-        [
-            subscription_pb2.SubscriptionRequest.Filter(
-                object_type="OBJECT_TYPE_INVENTORY"
-            )
-        ]
-    )
-    assert guest.errors == 1
-
-
 def test_guest_subscribe_before_auth(make_client):
     # create the owner/clerk
     charlie: RelayClientProtocol = make_client("charlie")
@@ -469,6 +445,7 @@ def test_guest_subscribe_before_auth(make_client):
     charlie.login()
     charlie.create_shop_manifest()
     assert charlie.errors == 0
+    assert charlie.shop is not None
 
     # create a guest without a keycard
     guest: RelayClientProtocol = make_client(
@@ -478,16 +455,25 @@ def test_guest_subscribe_before_auth(make_client):
     guest.subscribe_visitor()
     guest.handle_all()
     assert guest.errors == 0
+    assert guest.shop is not None
 
     # create a listing
     id = charlie.create_listing("book", 1)
     charlie.change_inventory(id, 10)
     assert charlie.errors == 0
 
+    charlie.handle_all()
+    assert charlie.errors == 0
+    from massmarket_client.utils import vid
+    lookup_id = vid(id)
+    assert charlie.shop.inventory.has(lookup_id)
+    assert charlie.shop.inventory.get(lookup_id) == 10
+
     # fetch the listing
     guest.handle_all()
-    assert guest.shop is not None
     assert guest.shop.listings.has(id)
+    assert guest.shop.inventory.has(lookup_id)
+    assert guest.shop.inventory.get(lookup_id) == 10
 
 
 def test_guest_subscribe_to_accounts(make_client):
@@ -732,6 +718,7 @@ def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
                 )
             },
         },
+        order_payment_timeout=0,
     )
     guest1._write_patch(
         type=mpatch.ObjectType.MANIFEST,

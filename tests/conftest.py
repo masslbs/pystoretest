@@ -305,12 +305,12 @@ class TestAccountManager:
                         "chainId": 31337,
                     }
                     recpt = self.w3.eth.send_transaction(transaction)  # type: ignore
+                    check_transaction(self.w3, recpt)
 
                     # Only increment nonce after successful transaction send
                     with open(self.nonce_file, "w") as f:
                         json.dump(current_nonce + 1, f)
 
-                    check_transaction(self.w3, recpt)
                     return new_account
 
             except Exception as e:

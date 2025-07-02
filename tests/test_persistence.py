@@ -464,7 +464,7 @@ def test_persistence_metadata_tracking(make_refactored_client, temp_persistence_
 
     assert metadata is not None
     assert metadata["shop_id"] == shop_id
-    assert metadata["schema_version"] == 4
+    assert metadata["schema_version"] == 5
     assert metadata["listings_count"] == 2
     assert metadata["tags_count"] == 1
     assert "last_updated" in metadata

@@ -50,7 +50,6 @@ import massmarket.cbor.order as mass_order
 from .utils import (
     to_32byte_hex,
     public_key_to_address,
-    now_pbts,
     cbor_now,
     new_object_id,
     vid,
@@ -74,7 +73,7 @@ class Order:
     def __init__(self, id):
         self.id = id
         self.items = {}
-        self.state = "open"
+        self.payment_state = mass_order.OrderPaymentState.OPEN
         self.purchase_address = None
         self.total = None
         self.payment_id = None
@@ -137,7 +136,7 @@ class RelayClient:
         self.relay_ping = float(relay_ping)
 
         # construct and dial websocket endpoint
-        relay_ws_endpoint = relay_addr._replace(path="/v4/sessions")
+        relay_ws_endpoint = relay_addr._replace(path="/v5/sessions")
         if relay_addr.scheme == "http":
             relay_ws_endpoint = relay_ws_endpoint._replace(scheme="ws")
         elif relay_addr.scheme == "https":
@@ -510,7 +509,7 @@ class RelayClient:
     def enroll_key_card(self, siwe_msg=None):
         keyCard = PrivateKey(self.own_key_card.key)
 
-        modified_url = self.relay_addr._replace(path="/v4/enroll_key_card")
+        modified_url = self.relay_addr._replace(path="/v5/enroll_key_card")
         if self.is_guest:
             modified_url = modified_url._replace(query="guest=1")
         enroll_url = modified_url.geturl()
@@ -847,6 +846,7 @@ class RelayClient:
                 elif obj_type == mass_patch.ObjectType.TAG:
                     err = self._patch_tag(patch)
                 elif obj_type == mass_patch.ObjectType.INVENTORY:
+                    print(f"{self.name}: inventory patch: {patch}")
                     err = self._patch_inventory(patch)
                 elif obj_type == mass_patch.ObjectType.ORDER:
                     err = self._patch_order(patch)
@@ -992,12 +992,13 @@ class RelayClient:
         if self.shop is None:
             self.accountsHamt = hamt.Trie.new()
             self.shop = Shop(
-                schema_version=4,
+                schema_version=5,
                 manifest=mass_manifest.Manifest(
                     shop_id=self.shop_token_id,
                     payees={},
                     accepted_currencies=[self.default_currency],
                     pricing_currency=self.default_currency,
+                    order_payment_timeout=60000000,
                 ),
                 accounts=self.accountsHamt,
             )
@@ -1316,7 +1317,9 @@ class RelayClient:
             current = self.shop.inventory.get(lookup_id)
             if current is None:
                 current = 0
-            self.shop.inventory.insert(lookup_id, current + patch.value)
+            new_value = current + patch.value
+            print(f"{self.name}/inventory/incr: {lookup_id} to {new_value}")
+            self.shop.inventory.insert(lookup_id, new_value)
         elif patch.op == mass_patch.OpString.DECREMENT:
             if not self.shop.inventory.has(lookup_id):
                 return notFoundError(f"unknown inventory: {lookup_id}")
@@ -1395,8 +1398,8 @@ class RelayClient:
             assert len(patch.path.fields) > 0
             if order is None:
                 return notFoundError(f"unknown order: {order_id}")
-            if patch.path.fields[0] == "State":
-                order.state = patch.value
+            if patch.path.fields[0] == "PaymentState":
+                order.payment_state = patch.value
             elif patch.path.fields[0] == "Items":
                 if not isinstance(patch.value, list):
                     return invalidError(f"invalid items: {patch.value}")
@@ -1569,6 +1572,7 @@ class RelayClient:
             "OBJECT_TYPE_TAG",
             "OBJECT_TYPE_ACCOUNT",
             "OBJECT_TYPE_MANIFEST",
+            "OBJECT_TYPE_INVENTORY",
         ]
         f = [subscription_pb2.SubscriptionRequest.Filter(object_type=t) for t in types]
         return self.subscribe(f)
@@ -1580,6 +1584,7 @@ class RelayClient:
             "OBJECT_TYPE_ACCOUNT",
             "OBJECT_TYPE_ORDER",
             "OBJECT_TYPE_MANIFEST",
+            "OBJECT_TYPE_INVENTORY",
         ]
         f = [subscription_pb2.SubscriptionRequest.Filter(object_type=t) for t in types]
         return self.subscribe(f)
@@ -1832,6 +1837,7 @@ class RelayClient:
                     city="",
                 )
             },
+            order_payment_timeout=600000000,
         )
         self._write_patch(
             obj=sm,
@@ -2184,7 +2190,7 @@ class RelayClient:
             oid = new_object_id()
         if not self.expect_error and self.shop.orders.has(oid):
             raise Exception(f"Order already exists: {oid}")
-        order = mass_order.Order(id=oid, items=[], state=mass_order.OrderState.OPEN)
+        order = mass_order.Order(id=oid, items=[], payment_state=mass_order.OrderPaymentState.OPEN)
         self._write_patch(
             type=mass_patch.ObjectType.ORDER,
             object_id=oid,
@@ -2268,8 +2274,8 @@ class RelayClient:
             type=mass_patch.ObjectType.ORDER,
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
-            fields=["State"],
-            obj=mass_order.OrderState.CANCELED,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.CANCELED,
         )
 
         if not was_batching:
@@ -2312,8 +2318,8 @@ class RelayClient:
             type=mass_patch.ObjectType.ORDER,
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
-            fields=["State"],
-            obj=mass_order.OrderState.COMMITTED,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.COMMITTED,
             wait=self.expect_error,
         )
 
@@ -2354,8 +2360,8 @@ class RelayClient:
             type=mass_patch.ObjectType.ORDER,
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
-            fields=["State"],
-            obj=mass_order.OrderState.PAYMENT_CHOSEN,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.PAYMENT_CHOSEN,
         )
 
         if not was_batching_before:

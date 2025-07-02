@@ -8,7 +8,7 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     contracts.url = "github:masslbs/contracts";
-    network-schema.url = "github:masslbs/network-schema";
+    network-schema.url = "github:masslbs/network-schema/v5-dev";
   };
 
   outputs = {
@@ -61,7 +61,7 @@
         # Python package derivation for massmarket-client
         massmarket-client-python = base-python.pkgs.buildPythonPackage rec {
           pname = "massmarket-client";
-          version = "1.0.0";
+          version = "5.0.0";
           format = "pyproject";
           src = ./.;
 

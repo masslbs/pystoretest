@@ -10,7 +10,7 @@ VERSION ?= $(shell python -c "import massmarket_client; print(massmarket_client.
 all: format lint test build
 
 test:
-	pytest tests/ -v -x --benchmark-skip -n auto --random-order
+	pytest tests/ -vv --benchmark-skip -n auto --random-order
 
 bench:
 	pytest tests/ -v --benchmark-only

@@ -198,15 +198,16 @@
         "utils": "utils"
       },
       "locked": {
-        "lastModified": 1751025515,
-        "narHash": "sha256-kOMi3yW7dK4rpaB24RJlS9JCA07I0CmGu75nSEXu81s=",
+        "lastModified": 1751380386,
+        "narHash": "sha256-EKBRFvoYjTe07nyKXFiifoImZbc+AaHLMO1H2J2nyqQ=",
         "owner": "masslbs",
         "repo": "network-schema",
-        "rev": "fd8193cad94f44f91c38f6aabb105224fe07700c",
+        "rev": "135d101a9e3e49c860a9c120bd2b85c5bb186cc1",
         "type": "github"
       },
       "original": {
         "owner": "masslbs",
+        "ref": "v5-dev",
         "repo": "network-schema",
         "type": "github"
       }

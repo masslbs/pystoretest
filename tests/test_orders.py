@@ -77,7 +77,7 @@ def wait_for_finalization(c: RelayClientProtocol, order_id: int):
         assert c.errors == 0
         order = c.shop.orders.get(order_id)
         assert order is not None
-        if order.state == morder.OrderState.UNPAID:
+        if order.payment_state == morder.OrderPaymentState.UNPAID:
             assert order.payment_details is not None
             return order
         print(f"{c.name} waiting for order {order_id} to be finalized")
@@ -94,7 +94,7 @@ def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retr
         assert c.errors == 0
         order = c.shop.orders.get(oid)
         assert order is not None
-        if order.state == morder.OrderState.PAID:
+        if order.payment_state == morder.OrderPaymentState.PAID:
             break
 
         # TODO: the eth_byCall variant needs new blocks to be yielded.
@@ -110,7 +110,7 @@ def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retr
     order = c.shop.orders.get(oid)
     assert order is not None
     # pprint(order.__dict__)
-    assert order.state == morder.OrderState.PAID, f"{oid} wasn't paid in time"
+    assert order.payment_state == morder.OrderPaymentState.PAID, f"{oid} wasn't paid in time"
     # stock updated
     for id, want in items:
         assert c.check_inventory(id) == want
@@ -216,8 +216,8 @@ def test_orders_no_currency(make_client: MakeClientCallable):
         type=mpatch.ObjectType.ORDER,
         object_id=oid,
         op=mpatch.OpString.REPLACE,
-        fields=["State"],
-        obj=morder.OrderState.PAYMENT_CHOSEN,
+        fields=["PaymentState"],
+        obj=morder.OrderPaymentState.PAYMENT_CHOSEN,
     )
     assert alice.errors == 1
     assert alice.last_error is not None
@@ -1080,7 +1080,7 @@ def skip_test_orders_variations_cancel_on_remove(
 
     o = bob.shop.orders.get(order1)
     assert o is not None
-    assert o.state == morder.OrderState.CANCELED
+    assert o.payment_state == morder.OrderPaymentState.CANCELED
 
 
 def test_order_not_committed(
