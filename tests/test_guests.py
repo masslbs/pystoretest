@@ -437,6 +437,7 @@ def test_shop_hydration_from_seed(make_client):
     customer.close()
     guest.close()
 
+
 def test_guest_subscribe_before_auth(make_client):
     # create the owner/clerk
     charlie: RelayClientProtocol = make_client("charlie")
@@ -465,6 +466,7 @@ def test_guest_subscribe_before_auth(make_client):
     charlie.handle_all()
     assert charlie.errors == 0
     from massmarket_client.utils import vid
+
     lookup_id = vid(id)
     assert charlie.shop.inventory.has(lookup_id)
     assert charlie.shop.inventory.get(lookup_id) == 10

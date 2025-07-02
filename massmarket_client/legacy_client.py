@@ -2190,7 +2190,9 @@ class RelayClient:
             oid = new_object_id()
         if not self.expect_error and self.shop.orders.has(oid):
             raise Exception(f"Order already exists: {oid}")
-        order = mass_order.Order(id=oid, items=[], payment_state=mass_order.OrderPaymentState.OPEN)
+        order = mass_order.Order(
+            id=oid, items=[], payment_state=mass_order.OrderPaymentState.OPEN
+        )
         self._write_patch(
             type=mass_patch.ObjectType.ORDER,
             object_id=oid,

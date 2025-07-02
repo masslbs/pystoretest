@@ -242,7 +242,11 @@ class TestAccountManager:
         self.initial_balance = initial_balance
 
         # Create a file-based lock in a temp directory
-        temp_dir = os.getcwd() if os.getcwd().startswith('/tmp/pystoretest.') else '/tmp/pystoretest'
+        temp_dir = (
+            os.getcwd()
+            if os.getcwd().startswith("/tmp/pystoretest.")
+            else "/tmp/pystoretest"
+        )
         os.makedirs(temp_dir, exist_ok=True)
         self.lock_file = os.path.join(temp_dir, "eth_test_nonce.lock")
         self.nonce_file = os.path.join(temp_dir, "eth_test_nonce.json")

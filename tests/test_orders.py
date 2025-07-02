@@ -110,7 +110,9 @@ def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retr
     order = c.shop.orders.get(oid)
     assert order is not None
     # pprint(order.__dict__)
-    assert order.payment_state == morder.OrderPaymentState.PAID, f"{oid} wasn't paid in time"
+    assert (
+        order.payment_state == morder.OrderPaymentState.PAID
+    ), f"{oid} wasn't paid in time"
     # stock updated
     for id, want in items:
         assert c.check_inventory(id) == want
