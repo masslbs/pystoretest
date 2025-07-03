@@ -4,7 +4,6 @@
 
 import asyncio
 import json
-import requests
 from pprint import pprint
 from websockets import connect
 
@@ -36,12 +35,9 @@ async def get_event():
         # you are now subscribed to the event
         # you keep trying to listen to new events (similar idea to longPolling)
         while True:
-            try:
-                message = await asyncio.wait_for(ws.recv(), timeout=60)
-                print(json.loads(message))
-                pass
-            except:
-                pass
+            message = await asyncio.wait_for(ws.recv(), timeout=60)
+            print(json.loads(message))
+            pass
 
 
 if __name__ == "__main__":

@@ -4,30 +4,22 @@
 
 import os
 import requests
-import json
 import datetime
 from typing import Optional, List, Tuple
 from hashlib import sha256
 import cbor2
 
-from web3 import Web3, Account, HTTPProvider
-from web3.middleware import SignAndSendRawMiddlewareBuilder
+from web3 import Web3, Account
 from eth_account.messages import encode_defunct
 
 from massmarket import (
-    cbor_encode,
     verify_proof,
-    get_root_hash_of_patches,
     error_pb2,
-    subscription_pb2,
-    transport_pb2,
     shop_requests_pb2,
-    base_types_pb2 as pb_base,
 )
 from massmarket.envelope_pb2 import Envelope
 import massmarket.cbor.patch as mass_patch
 import massmarket.cbor.base_types as mass_base
-import massmarket.cbor.manifest as mass_manifest
 import massmarket.cbor.listing as mass_listing
 import massmarket.cbor.order as mass_order
 
@@ -38,11 +30,6 @@ from .subscription_manager import SubscriptionManager
 from .blockchain_manager import BlockchainManager
 from .shop_operations import ShopOperations
 from .utils import (
-    cbor_now,
-    new_object_id,
-    vid,
-    transact_with_retry,
-    check_transaction,
     RelayException,
     public_key_to_address,
 )
@@ -99,7 +86,7 @@ class RefactoredRelayClient:
         )
 
         # Setup relay token and chain ID
-        if relay_token_id == None:
+        if relay_token_id is None:
             # Request testing info from relay
             discovery_resp = requests.get(
                 self.relay_http_address + "/testing/discovery",
@@ -185,7 +172,7 @@ class RefactoredRelayClient:
                 headers={"Origin": "localhost"},
             )
             if health_resp.status_code != 200:
-                raise Exception(f"relay health check failed")
+                raise Exception("relay health check failed")
             self.connect()
 
     # ============================================================================
@@ -461,7 +448,6 @@ class RefactoredRelayClient:
             )
 
         err = None
-        last_seq_no = None
 
         # Patch logging is now handled by StateManager.apply_patch()
 
@@ -497,8 +483,6 @@ class RefactoredRelayClient:
                     print(
                         f"{self.name}/newEvent shopSeq:{set.shop_seq_no} nonce:{header.key_card_nonce} kc:{signed_by} type:{obj_type}"
                     )
-
-                last_seq_no = set.shop_seq_no
 
                 # Apply patch using state manager
                 if self.state_manager:

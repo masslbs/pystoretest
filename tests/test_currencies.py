@@ -172,7 +172,7 @@ def skip_test_inconsistent_payee(make_client):
     # Add payee with chain_id 2 and set base currency with chain_id 1
     erc20_addr = alice.w3.to_bytes(hexstr=alice.erc20Token.address[2:])
     assert alice.account is not None
-    payee_addr = alice.w3.to_bytes(hexstr=alice.account.address)
+    # payee_addr = alice.w3.to_bytes(hexstr=alice.account.address)
     escrow_payee = mbase.Payee(
         address=mbase.ChainAddress(
             address=mbase.EthereumAddress(value=os.urandom(20)),

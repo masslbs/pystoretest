@@ -6,8 +6,7 @@ import os
 import pytest
 import time
 import datetime
-from typing import Tuple, Callable
-import copy
+from typing import Tuple
 
 from massmarket import (
     get_root_hash_of_patches,
@@ -15,7 +14,6 @@ from massmarket import (
     error_pb2,
     subscription_pb2,
 )
-import massmarket.cbor as mcbor
 import massmarket.cbor.patch as mpatch
 import massmarket.cbor.base_types as mbase
 import massmarket.cbor.listing as mlisting
@@ -25,7 +23,6 @@ from massmarket_client.utils import RelayException
 from massmarket_client.utils import new_object_id, vid
 from massmarket_client import RelayClientProtocol
 from tests.conftest import MakeClientCallable
-from massmarket_client import RelayClientProtocol
 
 
 def test_helper_vid():
@@ -262,7 +259,7 @@ def test_subscription_management(
     b.cancel_subscription(b.subscription)
     b.handle_all()
     assert b.errors == 0
-    assert b.subscription == None
+    assert b.subscription is None
 
     l1 = a.create_listing("small box", 23)
     l2 = a.create_listing("big box", 123)
@@ -312,6 +309,7 @@ def test_clerk_create_and_update_listing(make_client: MakeClientCallable):
     listing_id = a1.create_listing("shoes", 1000)
     new_price = 2000
     write_req_id = a1.update_listing(listing_id, price=new_price)
+    _ = write_req_id
     assert a1.errors == 0
     # TODO: we need logic to wait until the event was processed locally
     # might need to add the seq_no response to the relay
@@ -336,7 +334,7 @@ def test_clerk_create_and_update_listing(make_client: MakeClientCallable):
     # assert a2.shop.hash() == a1_hash
 
     newImage = "https://http.cat/status/102"
-    req_id2 = a2.update_listing(listing_id, add_image=newImage)
+    a2.update_listing(listing_id, add_image=newImage)
     a2.handle_all()
     assert a2.errors == 0
     a2_l = a2.shop.listings.get(listing_id)
@@ -393,7 +391,7 @@ def test_batch_update_listing(make_client: MakeClientCallable):
     a.update_listing(listing_id, add_image="https://example.com/tshirt-back.jpg")
 
     # Flush the batch to send all changes at once
-    req_id = a.flush_batch()
+    a.flush_batch()
     a.handle_all()
 
     # Verify all changes were applied
@@ -407,7 +405,7 @@ def test_batch_update_listing(make_client: MakeClientCallable):
     assert "https://example.com/tshirt-back.jpg" in listing.metadata.images
 
     # Test that batching can be used for adding and removing tags
-    tag_id = a.create_tag("sale")
+    a.create_tag("sale")
     assert a.errors == 0
 
     a.start_batch()

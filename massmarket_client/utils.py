@@ -98,10 +98,10 @@ def transact_with_retry(w3, account, contract_call, max_attempts=3):
             signed_tx = w3.eth.account.sign_transaction(tx, account.key)
             tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
             return tx_hash
-        except ValueError as e:
-            assert (
-                attempt < max_attempts
-            ), f"Failed to transact contract call after {max_attempts} attempts"
+        except ValueError:
+            assert attempt < max_attempts, (
+                f"Failed to transact contract call after {max_attempts} attempts"
+            )
             continue
 
 

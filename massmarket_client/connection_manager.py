@@ -87,9 +87,9 @@ class ConnectionManager:
                 break
             except InvalidStatus as e:
                 if e.response.status_code == 429:
-                    assert (
-                        attempt < max_retries - 1
-                    ), "Max retries reached. Unable to connect."
+                    assert attempt < max_retries - 1, (
+                        "Max retries reached. Unable to connect."
+                    )
                     sleep_time = retry_delay * (2**attempt)  # Exponential backoff
                     print(f"Rate limited. Retrying in {sleep_time} seconds...")
                     time.sleep(sleep_time)
@@ -190,7 +190,7 @@ class ConnectionManager:
         data = resp.SerializeToString()
         try:
             self.connection.send(data)
-        except ConnectionClosedError as err:
+        except ConnectionClosedError:
             self.connected = False
         else:
             self.pongs += 1
@@ -269,9 +269,6 @@ class AuthenticationManager:
 
     def authenticate(self) -> None:
         """Authenticate with the relay."""
-        from web3 import Account
-
-        key_card_account = Account.from_key(self.key_card_private_key)
         key_card = PrivateKey(self.key_card_private_key)
 
         # Send authentication request
@@ -294,7 +291,7 @@ class AuthenticationManager:
         # Wait for authentication response
         timeout = 10
         while req_id.raw in self.connection_manager.outgoing_requests:
-            print(f"waiting for authenticate response")
+            print("waiting for authenticate response")
             self.connection_manager.handle_all()
             timeout -= 1
             assert timeout > 0, "no authenticate response in time"
@@ -302,11 +299,11 @@ class AuthenticationManager:
         # Wait for challenge response
         timeout = 10
         while not self.logged_in:
-            print(f"waiting for challenge response")
+            print("waiting for challenge response")
             self.connection_manager.handle_all()
-            assert (
-                self.connection_manager.last_error is None
-            ), f"Error: {self.connection_manager.last_error}"
+            assert self.connection_manager.last_error is None, (
+                f"Error: {self.connection_manager.last_error}"
+            )
             timeout -= 1
             assert timeout > 0, "no challenge response in time"
 
@@ -425,5 +422,5 @@ class AuthenticationManager:
             raise EnrollException(
                 response.status_code, respData.get("error", "Unknown error")
             )
-        assert respData["success"] == True
+        assert respData["success"]
         print(f"enrolled keyCard {key_card.public_key.to_hex()}")

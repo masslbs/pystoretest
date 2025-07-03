@@ -138,7 +138,7 @@ class PatchHandler:
             elif patch.path.fields[0] == "ShippingRegions":
                 name = patch.path.fields[1]
                 if self.shop.manifest.shipping_regions is None:
-                    return notFoundError(f"no shipping regions defined")
+                    return notFoundError("no shipping regions defined")
                 if not isinstance(name, str):
                     return invalidError(f"invalid name: {name}")
                 if name not in self.shop.manifest.shipping_regions:
@@ -225,25 +225,25 @@ class PatchHandler:
         assert self.shop is not None
 
         if patch.op == mass_patch.OpString.ADD:
-            l = self.shop.listings.get(listing_id)
+            listing = self.shop.listings.get(listing_id)
             if patch.path.fields == []:
-                if l is not None:
+                if listing is not None:
                     return invalidError(f"listing already exists: {listing_id}")
                 else:
                     listing = mass_listing.Listing.from_cbor_dict(patch.value)
                     self.shop.listings.insert(listing.id, listing)
             elif len(patch.path.fields) == 2 and patch.path.fields[0] == "Options":
                 opt_name = patch.path.fields[1]
-                if l is None:
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                if l.options is None:
-                    l.options = {}
-                if opt_name in l.options:
+                if listing.options is None:
+                    listing.options = {}
+                if opt_name in listing.options:
                     return invalidError(f"option already exists: {opt_name}")
-                l.options[opt_name] = mass_listing.ListingOption.from_cbor_dict(
+                listing.options[opt_name] = mass_listing.ListingOption.from_cbor_dict(
                     patch.value
                 )
-                self.shop.listings.insert(listing_id, l)
+                self.shop.listings.insert(listing_id, listing)
             elif (
                 len(patch.path.fields) == 4
                 and patch.path.fields[0] == "Options"
@@ -251,65 +251,67 @@ class PatchHandler:
             ):
                 opt_name = patch.path.fields[1]
                 var_name = patch.path.fields[3]
-                if l is None:
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                if l.options is None or opt_name not in l.options:
+                if listing.options is None or opt_name not in listing.options:
                     return notFoundError(f"unknown option: {opt_name}")
-                curr_vars = l.options[opt_name].variations
+                curr_vars = listing.options[opt_name].variations
                 if curr_vars is not None and var_name in curr_vars:
                     return invalidError(f"variation already exists: {var_name}")
-                l.options[opt_name].variations[var_name] = (
+                listing.options[opt_name].variations[var_name] = (
                     mass_listing.ListingVariation.from_cbor_dict(patch.value)
                 )
-                self.shop.listings.insert(listing_id, l)
+                self.shop.listings.insert(listing_id, listing)
             else:
                 return invalidError(
                     f"unhandled add patch.path.fields for listing: {patch.path.fields}"
                 )
         elif patch.op == mass_patch.OpString.APPEND:
             if patch.path.fields == ["Metadata", "Images"]:
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                assert l.metadata.images is not None
-                l.metadata.images.append(patch.value)
-                self.shop.listings.insert(listing_id, l)
+                assert listing.metadata.images is not None
+                listing.metadata.images.append(patch.value)
+                self.shop.listings.insert(listing_id, listing)
             else:
                 return invalidError(
                     f"unhandled append patch.path.fields for listing: {patch.path.fields}"
                 )
         elif patch.op == mass_patch.OpString.REPLACE:
-            l = self.shop.listings.get(listing_id)
-            if l is None:
+            listing = self.shop.listings.get(listing_id)
+            if listing is None:
                 return notFoundError(f"unknown listing: {listing_id}")
             if patch.path.fields == ["Price"]:
                 if not isinstance(patch.value, int):
                     return invalidError(f"invalid price: {patch.value}")
-                l.price = mass_base.Uint256(patch.value)
+                listing.price = mass_base.Uint256(patch.value)
             elif patch.path.fields == ["ViewState"]:
                 if not isinstance(patch.value, int):
                     return invalidError(f"invalid viewState: {patch.value}")
-                l.view_state = mass_listing.ListingViewState(patch.value)
+                listing.view_state = mass_listing.ListingViewState(patch.value)
             elif patch.path.fields == ["Metadata"]:
                 if not isinstance(patch.value, dict):
                     return invalidError(f"invalid metadata: {patch.value}")
-                l.metadata = mass_listing.ListingMetadata.from_cbor_dict(patch.value)
+                listing.metadata = mass_listing.ListingMetadata.from_cbor_dict(
+                    patch.value
+                )
             elif patch.path.fields == ["Metadata", "Title"]:
                 if not isinstance(patch.value, str):
                     return invalidError(f"invalid title: {patch.value}")
-                l.metadata.title = patch.value
+                listing.metadata.title = patch.value
             elif patch.path.fields == ["Metadata", "Description"]:
                 if not isinstance(patch.value, str):
                     return invalidError(f"invalid description: {patch.value}")
-                l.metadata.description = patch.value
+                listing.metadata.description = patch.value
             else:
                 return invalidError(
                     f"unhandled replace patch.path.fields for listing: {patch.path.fields}"
                 )
         elif patch.op == mass_patch.OpString.REMOVE:
             if patch.path.fields == []:
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
                 self.shop.listings.delete(listing_id)
             elif len(patch.path.fields) == 3 and patch.path.fields[0] == "Metadata":
@@ -317,23 +319,23 @@ class PatchHandler:
                     index = int(patch.path.fields[2])
                     if not isinstance(index, int):
                         return invalidError(f"invalid image index: {index}")
-                    l = self.shop.listings.get(listing_id)
-                    if l is None:
+                    listing = self.shop.listings.get(listing_id)
+                    if listing is None:
                         return notFoundError(f"unknown listing: {listing_id}")
-                    assert l.metadata.images is not None
-                    if index < 0 or index >= len(l.metadata.images):
+                    assert listing.metadata.images is not None
+                    if index < 0 or index >= len(listing.metadata.images):
                         return invalidError(f"invalid image index: {index}")
-                    del l.metadata.images[index]
-                    self.shop.listings.insert(listing_id, l)
+                    del listing.metadata.images[index]
+                    self.shop.listings.insert(listing_id, listing)
             elif len(patch.path.fields) == 2 and patch.path.fields[0] == "Options":
                 opt_name = patch.path.fields[1]
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                assert l.options is not None
-                if opt_name in l.options:
-                    del l.options[opt_name]
-                self.shop.listings.insert(listing_id, l)
+                assert listing.options is not None
+                if opt_name in listing.options:
+                    del listing.options[opt_name]
+                self.shop.listings.insert(listing_id, listing)
             elif (
                 len(patch.path.fields) == 4
                 and patch.path.fields[0] == "Options"
@@ -341,18 +343,18 @@ class PatchHandler:
             ):
                 opt_name = patch.path.fields[1]
                 var_name = patch.path.fields[3]
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                assert l.options is not None
-                assert opt_name in l.options
-                if l.options[opt_name] is None:
+                assert listing.options is not None
+                assert opt_name in listing.options
+                if listing.options[opt_name] is None:
                     return notFoundError(f"unknown option: {opt_name}")
-                curr_vars = l.options[opt_name].variations
+                curr_vars = listing.options[opt_name].variations
                 if curr_vars is None or var_name not in curr_vars:
                     return notFoundError(f"unknown variation: {var_name}")
                 del curr_vars[var_name]
-                self.shop.listings.insert(listing_id, l)
+                self.shop.listings.insert(listing_id, listing)
             else:
                 return invalidError(
                     f"unhandled remove patch.path.fields for listing: {patch.path.fields}"

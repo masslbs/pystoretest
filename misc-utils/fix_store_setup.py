@@ -4,7 +4,6 @@
 
 import time
 import binascii
-import pprint
 
 from client import RelayClient
 
@@ -30,7 +29,7 @@ def main():
         # TODO: rc.shop...
         assert len(rc.all_key_cards) == 1
         rc.login()
-        assert rc.logged_in == True
+        assert rc.logged_in
         print("logged in!")
 
         rc.handle_all()
@@ -49,6 +48,7 @@ def main():
             addr=bytes.fromhex(rc.account.address[2:]),
             chain_id=op_eth.chain_id,
         )
+        _ = op_payee
         # rc.update_shop_manifest(
         # add_currency = op_eth,
         # add_payee = op_payee,

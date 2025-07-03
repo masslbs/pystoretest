@@ -78,7 +78,7 @@ def wc_auth(account_manager) -> RelayClientProtocol:
     conn.register_shop()
     conn.enroll_key_card()
     conn.login()
-    assert conn.logged_in == True
+    assert conn.logged_in
     return conn
 
 

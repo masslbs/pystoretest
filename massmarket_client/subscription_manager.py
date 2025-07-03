@@ -172,7 +172,5 @@ class SubscriptionManager:
                 raise RelayException(resp.error)
         else:
             del self.connection_manager.outgoing_requests[req_id.raw]["waiting"]
-            subscription_id = self.connection_manager.outgoing_requests[req_id.raw][
-                "subscription_id"
-            ]
+            self.connection_manager.outgoing_requests[req_id.raw]["subscription_id"]
             self.subscription = None

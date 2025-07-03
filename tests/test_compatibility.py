@@ -44,26 +44,26 @@ def compare_shop_states(old_client, new_client, test_name=""):
     assert new_shop is not None, f"{test_name}: New client has no shop"
 
     # Compare basic properties
-    assert (
-        old_shop.listings.size == new_shop.listings.size
-    ), f"{test_name}: Listing count mismatch"
+    assert old_shop.listings.size == new_shop.listings.size, (
+        f"{test_name}: Listing count mismatch"
+    )
     assert old_shop.tags.size == new_shop.tags.size, f"{test_name}: Tag count mismatch"
-    assert (
-        old_shop.orders.size == new_shop.orders.size
-    ), f"{test_name}: Order count mismatch"
+    assert old_shop.orders.size == new_shop.orders.size, (
+        f"{test_name}: Order count mismatch"
+    )
 
     # Compare specific listings
     def compare_listing(listing_id, old_listing):
-        assert new_shop.listings.has(
-            listing_id
-        ), f"{test_name}: New client missing listing {listing_id}"
+        assert new_shop.listings.has(listing_id), (
+            f"{test_name}: New client missing listing {listing_id}"
+        )
         new_listing = new_shop.listings.get(listing_id)
-        assert (
-            old_listing.price == new_listing.price
-        ), f"{test_name}: Price mismatch for listing {listing_id}"
-        assert (
-            old_listing.metadata.title == new_listing.metadata.title
-        ), f"{test_name}: Title mismatch for listing {listing_id}"
+        assert old_listing.price == new_listing.price, (
+            f"{test_name}: Price mismatch for listing {listing_id}"
+        )
+        assert old_listing.metadata.title == new_listing.metadata.title, (
+            f"{test_name}: Title mismatch for listing {listing_id}"
+        )
         return True
 
     if old_shop.listings.size > 0:
@@ -73,16 +73,16 @@ def compare_shop_states(old_client, new_client, test_name=""):
     def compare_tag(tag_name, old_tag):
         if old_tag is None:
             return True
-        assert new_shop.tags.has(
-            tag_name
-        ), f"{test_name}: New client missing tag {tag_name}"
+        assert new_shop.tags.has(tag_name), (
+            f"{test_name}: New client missing tag {tag_name}"
+        )
         new_tag = new_shop.tags.get(tag_name)
-        assert len(old_tag.listings) == len(
-            new_tag.listings
-        ), f"{test_name}: Tag listing count mismatch for {tag_name}"
-        assert set(old_tag.listings) == set(
-            new_tag.listings
-        ), f"{test_name}: Tag listings mismatch for {tag_name}"
+        assert len(old_tag.listings) == len(new_tag.listings), (
+            f"{test_name}: Tag listing count mismatch for {tag_name}"
+        )
+        assert set(old_tag.listings) == set(new_tag.listings), (
+            f"{test_name}: Tag listings mismatch for {tag_name}"
+        )
         return True
 
     if old_shop.tags.size > 0:
@@ -115,8 +115,8 @@ def test_direct_basic_connection_comparison(account_manager):
         new_client.handle_all()
 
         # Both should be logged in and connected
-        assert old_client.logged_in == new_client.logged_in == True
-        assert old_client.connected == new_client.connected == True
+        assert old_client.logged_in == new_client.logged_in is True
+        assert old_client.connected == new_client.connected is True
 
         # Ping/pong behavior should be similar
         initial_old_pongs = old_client.pongs
@@ -448,7 +448,7 @@ def test_signature_verification(account_manager):
     assert len(old_hash) == 32, "Hash should be 32 bytes"
     assert len(new_hash) == 32, "Hash should be 32 bytes"
 
-    print(f"✅ Hash verification test passed - both clients can compute state hashes")
+    print("✅ Hash verification test passed - both clients can compute state hashes")
 
     # Test 3: Address cache invalidation
     initial_new_addrs = new_client._valid_event_signing_addresses()
@@ -458,11 +458,11 @@ def test_signature_verification(account_manager):
 
     # Should recompute the same addresses
     recomputed_addrs = new_client._valid_event_signing_addresses()
-    assert set(initial_new_addrs) == set(
-        recomputed_addrs
-    ), "Cache invalidation should work correctly"
+    assert set(initial_new_addrs) == set(recomputed_addrs), (
+        "Cache invalidation should work correctly"
+    )
 
-    print(f"✅ Address cache test passed")
+    print("✅ Address cache test passed")
 
     # Test 4: Each client can verify its own signatures (self-consistency)
     for client_name, client in [("old", old_client), ("new", new_client)]:
@@ -490,9 +490,9 @@ def test_signature_verification(account_manager):
 
         # This client should be able to verify its own signature
         signer = client._verify_signature(header_bytes, signature)
-        assert (
-            signer is not None
-        ), f"{client_name} client should verify its own signature"
+        assert signer is not None, (
+            f"{client_name} client should verify its own signature"
+        )
         print(
             f"✅ {client_name} client can verify its own signatures - signer: {signer}"
         )
@@ -519,15 +519,15 @@ def test_signature_verification(account_manager):
 
         try:
             client._verify_signature(header_bytes, invalid_signature)
-            assert (
-                False
-            ), f"{client_name} client should have raised exception for invalid signature"
+            assert False, (
+                f"{client_name} client should have raised exception for invalid signature"
+            )
         except Exception as e:
-            assert (
-                "invalid signature" in str(e).lower()
-            ), f"{client_name} client should reject invalid signature: {e}"
+            assert "invalid signature" in str(e).lower(), (
+                f"{client_name} client should reject invalid signature: {e}"
+            )
 
-    print(f"✅ Invalid signature rejection test passed for both clients")
+    print("✅ Invalid signature rejection test passed for both clients")
 
     for client in [old_client, new_client]:
         if client:
@@ -617,7 +617,7 @@ def run_direct_comparison_suite():
         try:
             test_func(account_manager)
             test_results["passed"] += 1
-            print(f"  ✅ PASSED")
+            print("  ✅ PASSED")
 
         except Exception as e:
             test_results["failed"] += 1
@@ -637,17 +637,15 @@ def run_direct_comparison_suite():
     print(f"Total: {total}")
 
     if test_results["failed"] == 0:
-        print(f"\n🎉 ALL DIRECT COMPARISON TESTS PASSED!")
-        print(f"   The old and new client implementations behave identically.")
+        print("\n🎉 ALL DIRECT COMPARISON TESTS PASSED!")
+        print("   The old and new client implementations behave identically.")
         print(
-            f"   Core functionality, patch writing, error handling, and synchronization work the same."
+            "   Core functionality, patch writing, error handling, and synchronization work the same."
         )
     else:
-        print(f"\n⚠️  COMPATIBILITY ISSUES DETECTED:")
+        print("\n⚠️  COMPATIBILITY ISSUES DETECTED:")
         print(f"   {test_results['failed']} test(s) failed")
-        print(
-            f"   There are behavioral differences between old and new implementations"
-        )
+        print("   There are behavioral differences between old and new implementations")
 
 
 if __name__ == "__main__":

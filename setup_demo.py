@@ -5,9 +5,6 @@
 import time
 import threading
 import binascii
-import pprint
-import json
-import os
 
 from client import RelayClient
 from massmarket import shop_pb2, shop_events_pb2
@@ -25,7 +22,7 @@ def demo_client():
     assert rc.errors == 0
     assert len(rc.all_key_cards) == 1
     rc.login()
-    assert rc.logged_in == True
+    assert rc.logged_in
     print("logged in!")
     # first time task
     # rc.create_shop_manifest()

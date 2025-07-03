@@ -28,7 +28,7 @@ def main(shop_id: int, shop: Shop):
         print("KC private key:", rc.own_key_card.key.hex())
 
         rc.login()
-        assert rc.logged_in == True
+        assert rc.logged_in
         print("logged in!")
 
         rc.handle_all()

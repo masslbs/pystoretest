@@ -71,12 +71,12 @@ def test_bench_upload_listings_no_wait(
                     sender.handle_all()
                     last_handle = now()
 
-                batch = listings[i : i + batch_size]
+                batches = listings[i : i + batch_size]
                 sender.start_batch()
-                for l in batch:
+                for batch in batches:
                     sender._write_patch(
-                        obj=l,
-                        object_id=l.id,
+                        obj=batch,
+                        object_id=batch.id,
                         type=mass_patch.ObjectType.LISTING,
                         op="add",
                         wait=False,
@@ -84,13 +84,13 @@ def test_bench_upload_listings_no_wait(
                 sender.flush_batch(wait=False)
         else:
             # Process individually (no batching)
-            for l in listings:
+            for list in listings:
                 if since(last_handle).seconds > 2:
                     sender.handle_all()
                     last_handle = now()
                 sender._write_patch(
-                    obj=l,
-                    object_id=l.id,
+                    obj=list,
+                    object_id=list.id,
                     type=mass_patch.ObjectType.LISTING,
                     op="add",
                     wait=False,
@@ -129,10 +129,10 @@ def skip_test_bench_upload_listings_wait_response(
         return ([objfactory.create_test_listings(count)]), {}
 
     def upload(listings):
-        for l in listings:
+        for listing in listings:
             sender._write_patch(
-                obj=l,
-                object_id=l.id,
+                obj=listing,
+                object_id=listing.id,
                 type=mass_patch.ObjectType.LISTING,
                 op="add",
             )
@@ -163,13 +163,13 @@ def test_bench_download_listings(make_client: Callable[..., RelayClient], benchm
 
     # upload listings
     last_handle = now()
-    for l in listings:
+    for listing in listings:
         if since(last_handle).seconds > 2:
             sender.handle_all()
             last_handle = now()
         sender._write_patch(
-            obj=l,
-            object_id=l.id,
+            obj=listing,
+            object_id=listing.id,
             type=mass_patch.ObjectType.LISTING,
             op="add",
             wait=False,
@@ -219,7 +219,7 @@ def test_bench_client_concurrency(
         client = make_client(f"client_{i}", auto_connect=False)
         client.register_shop()
         client.enroll_key_card()
-        assert client.connected == False
+        assert not client.connected
         return client
 
     def setup_clients():
@@ -233,7 +233,7 @@ def test_bench_client_concurrency(
 
     # login and ping<>pong loop
     def client_session(client: RelayClient):
-        assert client.connected == False
+        assert not client.connected
         logger.info(f"{client.name} started")
         client.relay_ping = 2
         client.login()

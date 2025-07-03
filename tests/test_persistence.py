@@ -5,25 +5,12 @@
 import os
 import pytest
 import time
-import datetime
 import tempfile
 import shutil
-from typing import Tuple, Callable
-import copy
 
-from massmarket import (
-    base_types_pb2 as old_pb_types,
-    error_pb2,
-    subscription_pb2,
-)
-import massmarket.cbor as mcbor
-import massmarket.cbor.patch as mpatch
-import massmarket.cbor.base_types as mbase
-import massmarket.cbor.listing as mlisting
-import massmarket.cbor.order as morder
 
 from massmarket_client.client import RefactoredRelayClient
-from massmarket_client.persistence import ShopPersistence, PatchLogger, StateManager
+from massmarket_client.persistence import ShopPersistence
 
 
 @pytest.fixture
@@ -95,7 +82,7 @@ def test_basic_persistence_save_load(make_refactored_client, temp_persistence_di
     # Create some shop data
     client.create_shop_manifest()
     listing_id = client.create_listing("Test Item", 1000)
-    tag_id = client.create_tag("electronics")
+    client.create_tag("electronics")
     client.add_to_tag("electronics", listing_id)
     client.change_inventory(listing_id, 50)
 
@@ -162,7 +149,7 @@ def test_client_reconnection_with_events_during_disconnect(make_refactored_clien
     # Alice1 creates events while alice2 is offline
     listing1_id = alice1.create_listing("Laptop", 150000)
     listing2_id = alice1.create_listing("Mouse", 2500)
-    tag_id = alice1.create_tag("computers")
+    alice1.create_tag("computers")
     alice1.add_to_tag("computers", listing1_id)
     alice1.change_inventory(listing1_id, 5)
     alice1.change_inventory(listing2_id, 20)
@@ -242,7 +229,7 @@ def test_state_consistency_after_multiple_disconnections(make_refactored_client)
 
     # Phase 1: Alice creates some items while Bob and Charlie are online
     listing1_id = alice.create_listing("Book", 2000)
-    tag1_id = alice.create_tag("education")
+    alice.create_tag("education")
     alice.add_to_tag("education", listing1_id)
 
     # Let everyone sync
@@ -454,8 +441,8 @@ def test_persistence_metadata_tracking(make_refactored_client, temp_persistence_
 
     client.create_shop_manifest()
     listing1_id = client.create_listing("Product 1", 1000)
-    listing2_id = client.create_listing("Product 2", 2000)
-    tag_id = client.create_tag("category1")
+    client.create_listing("Product 2", 2000)
+    client.create_tag("category1")
     client.add_to_tag("category1", listing1_id)
 
     # Save and get metadata
@@ -589,7 +576,7 @@ def test_persistence_cleanup_and_deletion(make_refactored_client):
 
     # Delete shop
     deleted = client.persistence.delete_shop(shop_id)
-    assert deleted == True
+    assert deleted
 
     # Verify shop no longer exists
     assert not client.persistence.shop_exists(shop_id)
@@ -616,11 +603,11 @@ def test_concurrent_client_operations_with_persistence(make_refactored_client):
     bob.handle_all()
 
     # Both clients perform operations
-    listing1_id = alice.create_listing("Alice's Item", 1000)
-    listing2_id = bob.create_listing("Bob's Item", 2000)
+    alice.create_listing("Alice's Item", 1000)
+    bob.create_listing("Bob's Item", 2000)
 
-    alice_tag_id = alice.create_tag("alice-tag")
-    bob_tag_id = bob.create_tag("bob-tag")
+    alice.create_tag("alice-tag")
+    bob.create_tag("bob-tag")
 
     # Let both sync
     for _ in range(5):

@@ -14,7 +14,7 @@ try:
     assert rc.errors == 0
     assert len(rc.all_key_cards) == 1
     rc.login()
-    assert rc.logged_in == True
+    assert rc.logged_in
     print("logged in!")
 
     # first time task

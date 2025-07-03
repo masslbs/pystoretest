@@ -4,7 +4,7 @@
 
 import time
 from pprint import pprint
-from typing import Tuple, Callable
+from typing import Tuple
 from massmarket import (
     error_pb2,
 )
@@ -83,7 +83,7 @@ def wait_for_finalization(c: RelayClientProtocol, order_id: int):
         print(f"{c.name} waiting for order {order_id} to be finalized")
         pprint(order.__dict__)
         time.sleep(2)
-    raise Exception(f"order not finalized in time")
+    raise Exception("order not finalized in time")
 
 
 def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retry=15):
@@ -110,9 +110,9 @@ def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retr
     order = c.shop.orders.get(oid)
     assert order is not None
     # pprint(order.__dict__)
-    assert (
-        order.payment_state == morder.OrderPaymentState.PAID
-    ), f"{oid} wasn't paid in time"
+    assert order.payment_state == morder.OrderPaymentState.PAID, (
+        f"{oid} wasn't paid in time"
+    )
     # stock updated
     for id, want in items:
         assert c.check_inventory(id) == want
@@ -193,7 +193,7 @@ def test_orders_unpayed(make_client: MakeClientCallable):
 
 def test_orders_no_currency(make_client: MakeClientCallable):
     alice: RelayClientProtocol = make_client("alice")
-    shop_id = alice.register_shop()
+    alice.register_shop()
     alice.enroll_key_card()
     alice.login()
     alice.create_shop_manifest()
@@ -579,7 +579,7 @@ def test_orders_invalid(
 
 def test_orders_happy_eth_byCall(make_client):
     alice = make_client("alice")
-    shop_id = alice.register_shop()
+    alice.register_shop()
     alice.enroll_key_card()
     alice.login()
     alice.create_shop_manifest()
@@ -692,6 +692,7 @@ def test_orders_happy_eth_byAddress(make_client):
     wait_for_order_paid(alice, oid, [(iid1, 2), (iid2, 3)], ping=transaction)
 
     afterPaid = alice.w3.eth.get_balance(alice.account.address)
+    _ = afterPaid  # see comment
 
     tx = alice.payments.functions.processPayment(pr, alice.account.address).transact()
     alice.check_tx(tx)

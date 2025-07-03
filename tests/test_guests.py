@@ -9,7 +9,7 @@ import json
 import requests
 import cbor2
 import pytest
-from typing import Callable, Tuple
+from typing import Tuple
 from urllib.parse import urlparse
 from eth_keys.datatypes import PrivateKey
 from web3.exceptions import ContractCustomError
@@ -19,10 +19,10 @@ from massmarket import (
     error_pb2,
 )
 
-import massmarket.cbor.base_types as mbase
-import massmarket.cbor.order as morder
-import massmarket.cbor.manifest as mmanifest
-import massmarket.cbor.patch as mpatch
+import massmarket.cbor.base_types as mass_base
+import massmarket.cbor.order as mass_order
+import massmarket.cbor.manifest as mass_manifest
+import massmarket.cbor.patch as mass_patch
 
 from massmarket_client.legacy_client import (
     RelayClient,
@@ -159,7 +159,8 @@ def test_make_hydration_data(make_client: MakeClientCallable):
         finally:
             try:
                 test_client.close()
-            except:
+            except Exception as e:
+                _ = e
                 pass  # Ignore close errors
 
     seed_data_path = os.getenv("TEST_MAKE_HYDRATION_DATA")
@@ -216,8 +217,8 @@ def test_make_hydration_data(make_client: MakeClientCallable):
         owner._write_patch(
             obj=listing,
             object_id=listing.id,
-            type=mpatch.ObjectType.LISTING,
-            op=mpatch.OpString.ADD,
+            type=mass_patch.ObjectType.LISTING,
+            op=mass_patch.OpString.ADD,
         )
         listing_ids.append(listing.id)
     owner.flush_batch()
@@ -228,8 +229,8 @@ def test_make_hydration_data(make_client: MakeClientCallable):
         # Change inventory levels (different for each listing)
         owner._write_patch(
             object_id=listing.id,
-            type=mpatch.ObjectType.INVENTORY,
-            op=mpatch.OpString.ADD,
+            type=mass_patch.ObjectType.INVENTORY,
+            op=mass_patch.OpString.ADD,
             obj=1000 - i * 10,
         )
     owner.flush_batch()
@@ -251,7 +252,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
     cust1.commit_items(order_id1)
     cust1.update_address_for_order(
         order_id1,
-        invoice=morder.AddressDetails(
+        invoice=mass_order.AddressDetails(
             name="Max Testdata",
             address1="Somestreet 1",
             city="City",
@@ -322,7 +323,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
     owner.close()
 
 
-def test_shop_hydration_from_seed(make_client):
+def test_shop_hydration_from_seed():
     """Test that we can hydrate a shop from seed data and access the expected data."""
 
     # Check if the CBOR file exists
@@ -332,7 +333,6 @@ def test_shop_hydration_from_seed(make_client):
     # Load the test data from CBOR
     if seed_data_path is None:
         pytest.skip("TEST_MAKE_HYDRATION_DATA is not set")
-        return
 
     with open(seed_data_path, "rb") as f:
         test_data = cbor2.load(f)
@@ -386,13 +386,13 @@ def test_shop_hydration_from_seed(make_client):
     assert owner.shop is not None
 
     for order_id in customer1_order_ids:
-        assert owner.shop.orders.has(
-            order_id
-        ), f"Customer order {order_id} not found in shop"
+        assert owner.shop.orders.has(order_id), (
+            f"Customer order {order_id} not found in shop"
+        )
 
-    assert customer.shop.orders.has(
-        customer1_order_ids[0]
-    ), f"Customer order {customer1_order_ids[0]} not found in customer shop"
+    assert customer.shop.orders.has(customer1_order_ids[0]), (
+        f"Customer order {customer1_order_ids[0]} not found in customer shop"
+    )
 
     # Connect as the guest to verify their order
     guest = RelayClient(
@@ -411,24 +411,24 @@ def test_shop_hydration_from_seed(make_client):
 
     # Verify guest order
     guest_order_id = customer2_order_ids[0]
-    assert owner.shop.orders.has(
-        guest_order_id
-    ), f"Guest order {guest_order_id} not found in shop"
-    assert guest.shop.orders.has(
-        guest_order_id
-    ), f"Guest order {guest_order_id} not found in guest shop"
+    assert owner.shop.orders.has(guest_order_id), (
+        f"Guest order {guest_order_id} not found in shop"
+    )
+    assert guest.shop.orders.has(guest_order_id), (
+        f"Guest order {guest_order_id} not found in guest shop"
+    )
 
     # Verify shop has the expected listings
     for listing_id in listing_ids:
-        assert owner.shop.listings.has(
-            listing_id
-        ), f"Listing {listing_id} not found in shop"
-        assert customer.shop.listings.has(
-            listing_id
-        ), f"Listing {listing_id} not found in customer shop"
-        assert guest.shop.listings.has(
-            listing_id
-        ), f"Listing {listing_id} not found in guest shop"
+        assert owner.shop.listings.has(listing_id), (
+            f"Listing {listing_id} not found in shop"
+        )
+        assert customer.shop.listings.has(listing_id), (
+            f"Listing {listing_id} not found in customer shop"
+        )
+        assert guest.shop.listings.has(listing_id), (
+            f"Listing {listing_id} not found in guest shop"
+        )
 
     assert owner.shop.hash() == shop_root
 
@@ -612,7 +612,7 @@ def test_guest_commit_other_users_order(
     # now guest1 commits it for the next test step
     guest1.commit_items(order1)
     assert guest1.errors == 0
-    addr = morder.AddressDetails(
+    addr = mass_order.AddressDetails(
         name="Max Mustermann",
         address1="Somestreet 1",
         city="City",
@@ -673,7 +673,7 @@ def test_guest_cannot_update_listing(make_two_guests):
     assert clerk.errors == 0
 
     guest1.expect_error = True
-    new_price = mbase.Uint256(value=1)
+    new_price = mass_base.Uint256(value=1)
     guest1.update_listing(id, price=new_price)
     assert guest1.errors == 1
     assert guest1.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
@@ -683,7 +683,7 @@ def test_guest_cannot_create_or_update_tag(make_two_guests):
     clerk, guest1, _ = make_two_guests
 
     guest1.expect_error = True
-    tag_id = guest1.create_tag("unauthorized_tag")
+    guest1.create_tag("unauthorized_tag")
     assert guest1.errors == 1
     assert guest1.last_error.code == error_pb2.ERROR_CODES_NOT_FOUND
 
@@ -707,15 +707,15 @@ def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
     assert guest1.shop is not None
 
     guest1.expect_error = True
-    sm = mmanifest.Manifest(
-        shop_id=mbase.Uint256(value=guest1.shop_token_id),
+    sm = mass_manifest.Manifest(
+        shop_id=mass_base.Uint256(value=guest1.shop_token_id),
         pricing_currency=guest1.default_currency,
         accepted_currencies={
             guest1.chain_id: {guest1.default_currency.address},
         },
         payees={
             guest1.chain_id: {
-                guest1.default_payee.address.address: mbase.PayeeMetadata(
+                guest1.default_payee.address.address: mass_base.PayeeMetadata(
                     call_as_contract=False
                 )
             },
@@ -723,9 +723,9 @@ def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
         order_payment_timeout=0,
     )
     guest1._write_patch(
-        type=mpatch.ObjectType.MANIFEST,
+        type=mass_patch.ObjectType.MANIFEST,
         obj=sm,
-        op=mpatch.OpString.REPLACE,
+        op=mass_patch.OpString.REPLACE,
     )
     assert guest1.errors == 1
     assert guest1.last_error is not None
@@ -735,9 +735,11 @@ def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
     guest1.errors = 0
     guest1.last_error = None
 
-    p = mbase.Payee(
-        address=mbase.ChainAddress(
-            address=mbase.EthereumAddress(value=guest1.default_payee.address.address),
+    p = mass_base.Payee(
+        address=mass_base.ChainAddress(
+            address=mass_base.EthereumAddress(
+                value=guest1.default_payee.address.address
+            ),
             chain_id=guest1.chain_id,
         ),
         call_as_contract=False,

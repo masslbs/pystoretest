@@ -202,15 +202,15 @@
             hooks = {
               alejandra.enable = true;
               typos.enable = true;
-              black.enable = true;
               ruff.enable = true;
+              ruff-format.enable = true;
             };
           };
         };
 
         devShells.default = pkgs.mkShell {
           buildInputs =
-            [enhanced-python pkgs.pyright pkgs.black pkgs.alejandra pkgs.reuse pkgs.ruff]
+            [enhanced-python pkgs.pyright pkgs.alejandra pkgs.reuse pkgs.ruff]
             ++ config.pre-commit.settings.enabledPackages;
           shellHook = ''
             ${config.pre-commit.settings.installationScript}

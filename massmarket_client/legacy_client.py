@@ -155,7 +155,7 @@ class RelayClient:
                 headers={"Origin": "localhost"},
             )
             if health_resp.status_code != 200:
-                raise Exception(f"relay health check failed")
+                raise Exception("relay health check failed")
             self.connect()
 
         self.logged_in = False
@@ -168,7 +168,7 @@ class RelayClient:
         self.expect_error = False
         self.last_error = None
 
-        if relay_token_id == None:
+        if relay_token_id is None:
             # request testing info from relay
             discovery_resp = requests.get(
                 self.relay_http_address + "/testing/discovery",
@@ -349,25 +349,25 @@ class RelayClient:
                 # TODO: use new timestamps
                 print(f"  Order ID: {order_id}")
                 print(f"    State: {order.state}")
-                print(f"    Items:")
+                print("    Items:")
                 for item in order.items:
                     print(
                         f"    Listing ID: {item.listing_id} Quantity: {item.quantity}"
                     )
                 if order.payment_details:
-                    print(f"  Totals:")
+                    print("  Totals:")
                     print(f"    Total: {order.payment_details.total}")
                     print(f"    Payment ID: {order.payment_details.payment_id}")
                     print(f"    Payment TTL: {order.payment_details.ttl}")
                 if order.chosen_payee:
-                    print(f"  Chosen Payee:")
+                    print("  Chosen Payee:")
                     print(
                         f"    Address: {order.chosen_payee.address.address.to_bytes().hex()}"
                     )
                     print(f"    Chain ID: {order.chosen_payee.address.chain_id}")
                     print(f"    Is Endpoint: {order.chosen_payee.call_as_contract}")
                 if order.shipping_address:
-                    print(f"  Shipping Details:")
+                    print("  Shipping Details:")
                     print(f"    Name: {order.shipping_address.name}")
                     print(f"    Address: {order.shipping_address.address1}")
                     print(f"    City: {order.shipping_address.city}")
@@ -576,7 +576,7 @@ class RelayClient:
             raise EnrollException(
                 response.status_code, respData.get("error", "Unknown error")
             )
-        assert respData["success"] == True
+        assert respData["success"]
         print(f"{self.name} enrolled keyCard {keyCard.public_key.to_hex()}")
 
     def _try_read(self):
@@ -639,7 +639,7 @@ class RelayClient:
         try:
             assert self.connection is not None
             self.connection.send(data)
-        except ConnectionClosedError as err:
+        except ConnectionClosedError:
             self.connected = False
             # print(f"{self.name} failed to respond to ping")
         else:
@@ -816,7 +816,6 @@ class RelayClient:
                 signed_by = self._verify_signature(set.header, set.signature)
 
             for i, patch_data in enumerate(set.patches):
-
                 # TODO: move to verify_proof helper
                 [leaf_index, size, proof_path] = cbor2.loads(set.proofs[i])
                 if proof_path is None:
@@ -977,7 +976,7 @@ class RelayClient:
             elif patch.path.fields[0] == "ShippingRegions":
                 name = patch.path.fields[1]
                 if self.shop.manifest.shipping_regions is None:
-                    return notFoundError(f"no shipping regions defined")
+                    return notFoundError("no shipping regions defined")
                 if not isinstance(name, str):
                     return invalidError(f"invalid name: {name}")
                 if name not in self.shop.manifest.shipping_regions:
@@ -1105,25 +1104,25 @@ class RelayClient:
         assert isinstance(listing_id, int)
         assert self.shop is not None
         if patch.op == mass_patch.OpString.ADD:
-            l = self.shop.listings.get(listing_id)
+            listing = self.shop.listings.get(listing_id)
             if patch.path.fields == []:
-                if l is not None:
+                if listing is not None:
                     return invalidError(f"listing already exists: {listing_id}")
                 else:
                     listing = mass_listing.Listing.from_cbor_dict(patch.value)
                     self.shop.listings.insert(listing.id, listing)
             elif len(patch.path.fields) == 2 and patch.path.fields[0] == "Options":
                 opt_name = patch.path.fields[1]
-                if l is None:
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                if l.options is None:
-                    l.options = {}
-                if opt_name in l.options:
+                if listing.options is None:
+                    listing.options = {}
+                if opt_name in listing.options:
                     return invalidError(f"option already exists: {opt_name}")
-                l.options[opt_name] = mass_listing.ListingOption.from_cbor_dict(
+                listing.options[opt_name] = mass_listing.ListingOption.from_cbor_dict(
                     patch.value
                 )
-                self.shop.listings.insert(listing_id, l)
+                self.shop.listings.insert(listing_id, listing)
             elif (
                 len(patch.path.fields) == 4
                 and patch.path.fields[0] == "Options"
@@ -1131,57 +1130,59 @@ class RelayClient:
             ):
                 opt_name = patch.path.fields[1]
                 var_name = patch.path.fields[3]
-                if l is None:
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                if l.options is None or opt_name not in l.options:
+                if listing.options is None or opt_name not in listing.options:
                     return notFoundError(f"unknown option: {opt_name}")
-                curr_vars = l.options[opt_name].variations
+                curr_vars = listing.options[opt_name].variations
                 if curr_vars is not None and var_name in curr_vars:
                     return invalidError(f"variation already exists: {var_name}")
-                l.options[opt_name].variations[var_name] = (
+                listing.options[opt_name].variations[var_name] = (
                     mass_listing.ListingVariation.from_cbor_dict(patch.value)
                 )
-                self.shop.listings.insert(listing_id, l)
+                self.shop.listings.insert(listing_id, listing)
             else:
                 return invalidError(
                     f"unhandled add patch.path.fields for listing: {patch.path.fields}"
                 )
         elif patch.op == mass_patch.OpString.APPEND:
             if patch.path.fields == ["Metadata", "Images"]:
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                assert l.metadata.images is not None
-                l.metadata.images.append(patch.value)
-                self.shop.listings.insert(listing_id, l)
+                assert listing.metadata.images is not None
+                listing.metadata.images.append(patch.value)
+                self.shop.listings.insert(listing_id, listing)
             else:
                 return invalidError(
                     f"unhandled append patch.path.fields for listing: {patch.path.fields}"
                 )
         elif patch.op == mass_patch.OpString.REPLACE:
-            l = self.shop.listings.get(listing_id)
-            if l is None:
+            listing = self.shop.listings.get(listing_id)
+            if listing is None:
                 return notFoundError(f"unknown listing: {listing_id}")
             if patch.path.fields == ["Price"]:
                 if not isinstance(patch.value, int):
                     return invalidError(f"invalid price: {patch.value}")
-                l.price = mass_base.Uint256(patch.value)
+                listing.price = mass_base.Uint256(patch.value)
             elif patch.path.fields == ["ViewState"]:
                 if not isinstance(patch.value, int):
                     return invalidError(f"invalid viewState: {patch.value}")
-                l.view_state = mass_listing.ListingViewState(patch.value)
+                listing.view_state = mass_listing.ListingViewState(patch.value)
             elif patch.path.fields == ["Metadata"]:
                 if not isinstance(patch.value, dict):
                     return invalidError(f"invalid metadata: {patch.value}")
-                l.metadata = mass_listing.ListingMetadata.from_cbor_dict(patch.value)
+                listing.metadata = mass_listing.ListingMetadata.from_cbor_dict(
+                    patch.value
+                )
             elif patch.path.fields == ["Metadata", "Title"]:
                 if not isinstance(patch.value, str):
                     return invalidError(f"invalid title: {patch.value}")
-                l.metadata.title = patch.value
+                listing.metadata.title = patch.value
             elif patch.path.fields == ["Metadata", "Description"]:
                 if not isinstance(patch.value, str):
                     return invalidError(f"invalid description: {patch.value}")
-                l.metadata.description = patch.value
+                listing.metadata.description = patch.value
             # TODO: replace image by index
             else:
                 return invalidError(
@@ -1189,8 +1190,8 @@ class RelayClient:
                 )
         elif patch.op == mass_patch.OpString.REMOVE:
             if patch.path.fields == []:
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
                 self.shop.listings.delete(listing_id)
             elif len(patch.path.fields) == 3 and patch.path.fields[0] == "Metadata":
@@ -1198,23 +1199,23 @@ class RelayClient:
                     index = int(patch.path.fields[2])
                     if not isinstance(index, int):
                         return invalidError(f"invalid image index: {index}")
-                    l = self.shop.listings.get(listing_id)
-                    if l is None:
+                    listing = self.shop.listings.get(listing_id)
+                    if listing is None:
                         return notFoundError(f"unknown listing: {listing_id}")
-                    assert l.metadata.images is not None
-                    if index < 0 or index >= len(l.metadata.images):
+                    assert listing.metadata.images is not None
+                    if index < 0 or index >= len(listing.metadata.images):
                         return invalidError(f"invalid image index: {index}")
-                    del l.metadata.images[index]
-                    self.shop.listings.insert(listing_id, l)
+                    del listing.metadata.images[index]
+                    self.shop.listings.insert(listing_id, listing)
             elif len(patch.path.fields) == 2 and patch.path.fields[0] == "Options":
                 opt_name = patch.path.fields[1]
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                assert l.options is not None
-                if opt_name in l.options:
-                    del l.options[opt_name]
-                self.shop.listings.insert(listing_id, l)
+                assert listing.options is not None
+                if opt_name in listing.options:
+                    del listing.options[opt_name]
+                self.shop.listings.insert(listing_id, listing)
             elif (
                 len(patch.path.fields) == 4
                 and patch.path.fields[0] == "Options"
@@ -1222,18 +1223,18 @@ class RelayClient:
             ):
                 opt_name = patch.path.fields[1]
                 var_name = patch.path.fields[3]
-                l = self.shop.listings.get(listing_id)
-                if l is None:
+                listing = self.shop.listings.get(listing_id)
+                if listing is None:
                     return notFoundError(f"unknown listing: {listing_id}")
-                assert l.options is not None
-                assert opt_name in l.options
-                if l.options[opt_name] is None:
+                assert listing.options is not None
+                assert opt_name in listing.options
+                if listing.options[opt_name] is None:
                     return notFoundError(f"unknown option: {opt_name}")
-                curr_vars = l.options[opt_name].variations
+                curr_vars = listing.options[opt_name].variations
                 if curr_vars is None or var_name not in curr_vars:
                     return notFoundError(f"unknown variation: {var_name}")
                 del curr_vars[var_name]
-                self.shop.listings.insert(listing_id, l)
+                self.shop.listings.insert(listing_id, listing)
             else:
                 return invalidError(
                     f"unhandled remove patch.path.fields for listing: {patch.path.fields}"
@@ -1484,9 +1485,9 @@ class RelayClient:
                     break
                 except InvalidStatus as e:
                     if e.response.status_code == 429:
-                        assert (
-                            attempt < max_retries - 1
-                        ), "Max retries reached. Unable to connect."
+                        assert attempt < max_retries - 1, (
+                            "Max retries reached. Unable to connect."
+                        )
                         sleep_time = retry_delay * (2**attempt)  # Exponential backoff
                         print(f"Rate limited. Retrying in {sleep_time} seconds...")
                         time.sleep(sleep_time)
@@ -1513,13 +1514,13 @@ class RelayClient:
         self.connection.send(data)
         timeout = 10
         while req_id.raw in self.outgoingRequests:
-            print(f"waiting for authenticate response")
+            print("waiting for authenticate response")
             self.handle_all()
             timeout -= 1
             assert timeout > 0, "no authenticate response in time"
         timeout = 10
         while not self.logged_in:  # wait for challenge resp
-            print(f"waiting for challenge response")
+            print("waiting for challenge response")
             self.handle_all()
             assert self.last_error is None, f"Error: {self.last_error}"
             timeout -= 1
@@ -1554,9 +1555,9 @@ class RelayClient:
         assert req_id is not None, "no request id"
         got_hash = self.outgoingRequests[req_id.raw]["new_state_hash"]
         has_hash = self.shop.hash()
-        assert (
-            got_hash == has_hash
-        ), f"shop hash mismatch: {got_hash.hex()} != {has_hash.hex()}"
+        assert got_hash == has_hash, (
+            f"shop hash mismatch: {got_hash.hex()} != {has_hash.hex()}"
+        )
         return got_hash
 
     def subscribe_all(self):
