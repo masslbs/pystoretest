@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: MIT
 
-from typing import Optional
+from typing import Optional, List, Tuple
+from abc import ABC, abstractmethod
+from copy import deepcopy
 import massmarket.cbor.patch as mass_patch
 import massmarket.cbor.base_types as mass_base
 import massmarket.cbor.manifest as mass_manifest
@@ -26,30 +28,158 @@ def invalidError(msg):
     )
 
 
+class StateChangeObserver(ABC):
+    """Abstract base class for state change observers"""
+
+    @abstractmethod
+    def on_state_change(
+        self, object_type: str, object_id: str, before_state, after_state
+    ):
+        """Called when an object's state changes
+
+        Args:
+            object_type: Type of object ("orders", "listings", etc.)
+            object_id: ID of the object that changed
+            before_state: State before the patch (None for ADD operations)
+            after_state: State after the patch (None for REMOVE operations)
+        """
+        pass
+
+
 class PatchHandler:
     """Handles application of patches to shop state."""
 
     def __init__(self, shop: Shop):
         self.shop = shop
+        self._observers: List[StateChangeObserver] = []
+
+    def add_observer(self, observer: StateChangeObserver):
+        """Add a state change observer"""
+        self._observers.append(observer)
+
+    def remove_observer(self, observer: StateChangeObserver):
+        """Remove a state change observer"""
+        self._observers.remove(observer)
 
     def apply_patch(self, patch: mass_patch.Patch) -> Optional[error_pb2.Error]:
         """Apply a patch to the shop state."""
         obj_type = patch.path.type
 
+        # Extract object type and ID for observer notification
+        object_type_str, object_id = self._parse_patch_path(patch)
+
+        # Capture before state if we have observers and it's a relevant operation
+        before_state = None
+        if self._observers and object_type_str:
+            # Always capture before state except for ADD operations creating new objects
+            if patch.op != mass_patch.OpString.ADD or (
+                patch.path.fields and len(patch.path.fields) > 0
+            ):
+                before_state = self._capture_state(object_type_str, object_id)
+
+        # Apply the patch
         if obj_type == mass_patch.ObjectType.MANIFEST:
-            return self._patch_manifest(patch)
+            error = self._patch_manifest(patch)
         elif obj_type == mass_patch.ObjectType.ACCOUNT:
-            return self._patch_account(patch)
+            error = self._patch_account(patch)
         elif obj_type == mass_patch.ObjectType.LISTING:
-            return self._patch_listing(patch)
+            error = self._patch_listing(patch)
         elif obj_type == mass_patch.ObjectType.TAG:
-            return self._patch_tag(patch)
+            error = self._patch_tag(patch)
         elif obj_type == mass_patch.ObjectType.INVENTORY:
-            return self._patch_inventory(patch)
+            error = self._patch_inventory(patch)
         elif obj_type == mass_patch.ObjectType.ORDER:
-            return self._patch_order(patch)
+            error = self._patch_order(patch)
         else:
-            return invalidError(f"unhandled object type: {obj_type}")
+            error = invalidError(f"unhandled object type: {obj_type}")
+
+        # Capture after state and notify observers if patch was successful
+        if error is None and self._observers and object_type_str:
+            after_state = self._capture_state(object_type_str, object_id)
+            self._notify_observers(
+                object_type_str, object_id, before_state, after_state
+            )
+
+        return error
+
+    def _parse_patch_path(
+        self, patch: mass_patch.Patch
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extract object type and ID from patch path
+
+        Returns:
+            Tuple of (object_type, object_id) or (None, None) if not applicable
+        """
+        obj_type = patch.path.type
+
+        if obj_type == mass_patch.ObjectType.ORDER:
+            return "orders", str(patch.path.object_id) if patch.path.object_id else None
+        elif obj_type == mass_patch.ObjectType.LISTING:
+            return "listings", str(
+                patch.path.object_id
+            ) if patch.path.object_id else None
+        elif obj_type == mass_patch.ObjectType.TAG:
+            return "tags", patch.path.tag_name
+        elif obj_type == mass_patch.ObjectType.ACCOUNT:
+            if patch.path.account_addr:
+                if isinstance(patch.path.account_addr, mass_base.EthereumAddress):
+                    addr = patch.path.account_addr.hex()
+                else:
+                    addr = patch.path.account_addr.hex()
+                return "accounts", addr
+        elif obj_type == mass_patch.ObjectType.INVENTORY:
+            # For inventory, create compound ID
+            listing_id = patch.path.object_id
+            lookup_id = str(listing_id) + ":"
+            if patch.path.fields:
+                fields = sorted(patch.path.fields)
+                lookup_id = lookup_id + ":".join(fields) + ":"
+            return "inventory", lookup_id
+
+        return None, None
+
+    def _capture_state(self, object_type: str, object_id: str):
+        """Capture current state of an object
+
+        Returns deep copy of object or None if not found
+        """
+        if not self.shop:
+            return None
+
+        if object_type == "orders" and hasattr(self.shop, "orders"):
+            order_id = int(object_id)
+            order = self.shop.orders.get(order_id)
+            return deepcopy(order) if order else None
+        elif object_type == "listings" and hasattr(self.shop, "listings"):
+            listing_id = int(object_id)
+            listing = self.shop.listings.get(listing_id)
+            return deepcopy(listing) if listing else None
+        elif object_type == "tags" and hasattr(self.shop, "tags"):
+            tag = self.shop.tags.get(object_id)
+            return deepcopy(tag) if tag else None
+        elif object_type == "accounts" and hasattr(self.shop, "accounts"):
+            # Convert hex string back to bytes for lookup
+            addr_bytes = bytes.fromhex(object_id)
+            account = self.shop.accounts.get(addr_bytes)
+            return deepcopy(account) if account else None
+        elif object_type == "inventory" and hasattr(self.shop, "inventory"):
+            inventory = self.shop.inventory.get(object_id)
+            return inventory  # Simple int, no need for deepcopy
+
+        return None
+
+    def _notify_observers(
+        self, object_type: str, object_id: str, before_state, after_state
+    ):
+        """Notify all observers of state change"""
+        for observer in self._observers:
+            try:
+                observer.on_state_change(
+                    object_type, object_id, before_state, after_state
+                )
+            except Exception as e:
+                # Log error but don't fail patch application
+                print(f"Observer error: {e}")
 
     def _patch_manifest(self, patch: mass_patch.Patch):
         if patch.op == mass_patch.OpString.REPLACE:
