@@ -265,10 +265,12 @@ class StateManager:
         shop_id: int,
         persistence: ShopPersistence,
         patch_logger: Optional[PatchLogger] = None,
+        patch_handler_factory=None,
     ):
         self.shop_id = shop_id
         self.persistence = persistence
         self.patch_logger = patch_logger
+        self.patch_handler_factory = patch_handler_factory
         self.shop: Optional[Shop] = None
         self.last_seq_no = 0
         self.dirty = False
@@ -321,7 +323,10 @@ class StateManager:
         shop = self.load_shop()
 
         # Apply patch using PatchHandler
-        patch_handler = PatchHandler(shop)
+        if self.patch_handler_factory:
+            patch_handler = self.patch_handler_factory(shop)
+        else:
+            patch_handler = PatchHandler(shop)
         error = patch_handler.apply_patch(patch)
 
         if error is not None:

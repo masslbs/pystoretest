@@ -47,6 +47,7 @@ class RefactoredRelayClient:
         key_card_nonce=1,
         guest=False,
         relay_http_address=None,
+        custom_patch_handler=None,
         relay_token_id=None,
         chain_id=None,
         auto_connect=True,
@@ -61,6 +62,7 @@ class RefactoredRelayClient:
         self.validate_patches = validate_patches
         self.is_guest = guest
         self.start_time = datetime.datetime.now(datetime.UTC)
+        self.custom_patch_handler = custom_patch_handler
 
         # Setup relay connection
         self.relay_http_address = (
@@ -221,7 +223,10 @@ class RefactoredRelayClient:
             return
 
         self.state_manager = StateManager(
-            self._shop_token_id, self.persistence, self.patch_logger
+            self._shop_token_id,
+            self.persistence,
+            self.patch_logger,
+            patch_handler_factory=self.custom_patch_handler,
         )
 
         # Rebuild keycard tracking from any existing shop state
