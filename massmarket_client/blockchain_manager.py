@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: MIT
 
 import os
-import json
 from web3 import Web3, HTTPProvider
 from web3.middleware import SignAndSendRawMiddlewareBuilder
 from .utils import transact_with_retry, check_transaction
+from .contracts import DEPLOYMENT_ADDRESSES, ABIS
 
 
 class BlockchainManager:
@@ -30,12 +30,7 @@ class BlockchainManager:
 
     def _load_contracts(self):
         """Load Ethereum contracts."""
-        contracts_path = os.getenv("MASS_CONTRACTS")
-        assert contracts_path is not None, "MASS_CONTRACTS is not set"
-
-        addresses = json.loads(
-            open(contracts_path + "/deploymentAddresses.json", "r").read()
-        )
+        addresses = DEPLOYMENT_ADDRESSES
         if self.debug:
             print("Using contracts:")
             import pprint
@@ -43,27 +38,23 @@ class BlockchainManager:
             pprint.pprint(addresses)
 
         # Load RelayReg contract
-        relayRegABI = open(contracts_path + "/abi/RelayReg.json", "r").read()
         self.relayReg = self.w3.eth.contract(
-            address=addresses["RelayReg"], abi=relayRegABI
+            address=addresses["RelayReg"], abi=ABIS["RelayReg"]
         )
 
         # Load ShopReg contract
-        shopRegABI = open(contracts_path + "/abi/ShopReg.json", "r").read()
         self.shopReg = self.w3.eth.contract(
-            address=addresses["ShopReg"], abi=shopRegABI
+            address=addresses["ShopReg"], abi=ABIS["ShopReg"]
         )
 
         # Load ERC20 testing token contract
-        erc20TestingTokenABI = open(contracts_path + "/abi/Eddies.json", "r").read()
         self.erc20Token = self.w3.eth.contract(
-            address=addresses["Eddies"], abi=erc20TestingTokenABI
+            address=addresses["Eddies"], abi=ABIS["Eddies"]
         )
 
         # Load Payments contract
-        paymentsABI = open(contracts_path + "/abi/PaymentsByAddress.json", "r").read()
         self.payments = self.w3.eth.contract(
-            address=addresses["Payments"], abi=paymentsABI
+            address=addresses["Payments"], abi=ABIS["PaymentsByAddress"]
         )
 
     def check_tx(self, tx):

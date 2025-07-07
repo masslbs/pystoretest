@@ -60,6 +60,7 @@ from .utils import (
     RelayException,
     EnrollException,
 )
+from .contracts import DEPLOYMENT_ADDRESSES, ABIS
 
 
 class PriceTotals:
@@ -410,33 +411,24 @@ class RelayClient:
             self.shop.accounts.all(print_account)
 
     def __load_contracts(self):
-        contracts_path = os.getenv("MASS_CONTRACTS")
-        assert contracts_path is not None, "MASS_CONTRACTS is not set"
-
-        addresses = json.loads(
-            open(contracts_path + "/deploymentAddresses.json", "r").read()
-        )
+        addresses = DEPLOYMENT_ADDRESSES
         print("using contracts:")
         pprint(addresses)
 
-        relayRegABI = open(contracts_path + "/abi/RelayReg.json", "r").read()
         self.relayReg = self.w3.eth.contract(
-            address=addresses["RelayReg"], abi=relayRegABI
+            address=addresses["RelayReg"], abi=ABIS["RelayReg"]
         )
 
-        shopRegABI = open(contracts_path + "/abi/ShopReg.json", "r").read()
         self.shopReg = self.w3.eth.contract(
-            address=addresses["ShopReg"], abi=shopRegABI
+            address=addresses["ShopReg"], abi=ABIS["ShopReg"]
         )
 
-        erc20TestingTokenABI = open(contracts_path + "/abi/Eddies.json", "r").read()
         self.erc20Token = self.w3.eth.contract(
-            address=addresses["Eddies"], abi=erc20TestingTokenABI
+            address=addresses["Eddies"], abi=ABIS["Eddies"]
         )
 
-        paymentsABI = open(contracts_path + "/abi/PaymentsByAddress.json", "r").read()
         self.payments = self.w3.eth.contract(
-            address=addresses["Payments"], abi=paymentsABI
+            address=addresses["Payments"], abi=ABIS["PaymentsByAddress"]
         )
 
     def check_tx(self, tx):

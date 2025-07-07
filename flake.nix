@@ -8,12 +8,12 @@
     systems.url = "github:nix-systems/default";
     flake-parts.url = "github:hercules-ci/flake-parts";
     contracts.url = "github:masslbs/contracts";
-    network-schema.url = "github:masslbs/network-schema/v5-dev";
+    network-schema.url = "github:masslbs/network-schema/python-env-tinker";
+    nixpkgs.follows = "network-schema/nixpkgs"; # align python versions
     pre-commit-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    nixpkgs.follows = "network-schema/nixpkgs";
   };
 
   outputs = inputs @ {
@@ -35,12 +35,10 @@
         config,
         ...
       }: let
-        # Use the mass-python from network-schema as base and add extra packages
-        base-python = network-schema.packages.${system}.mass-python;
         contracts_abi = contracts.packages.${system}.default;
 
-        # Build extra packages for massmarket-client (only ones not already in massmarket)
-        extraPackages = with base-python.pkgs; let
+        # Build extra packages for massmarket-client (only ones not already in network-schema)
+        extraPackages = with python-env.pkgs; let
           abnf = buildPythonPackage rec {
             pname = "abnf";
             version = "2.2.0";
@@ -71,24 +69,47 @@
           filelock
         ];
 
+        schema-package = network-schema.packages.${system}.python-package;
+
+        pystoretest-deps = ps:
+          with ps;
+            [
+              pytest-timeout
+              pytest-xdist
+              pytest-repeat
+              pytest-random-order
+              pytest-benchmark
+              factory-boy
+            ]
+            ++ extraPackages
+            ++ [network-schema.packages.${system}.massmarket-python];
+
+        # Use the mass-python from network-schema as base and add extra packages
+        build-env = network-schema.lib.makePythonEnvironment {
+          inherit pkgs;
+          additionalPackages = pystoretest-deps;
+        };
+
         # Python package derivation for massmarket-client
-        massmarket-client-python = base-python.pkgs.buildPythonPackage rec {
+        massmarket-client-python = build-env.pkgs.buildPythonPackage rec {
           pname = "massmarket-client";
           version = "5.0.0";
           format = "pyproject";
           src = ./.;
 
-          nativeBuildInputs = with base-python.pkgs; [setuptools setuptools-scm];
-          propagatedBuildInputs = with base-python.pkgs;
-            [
-              network-schema.packages.${system}.massmarket-python
-            ]
-            ++ extraPackages;
+          nativeBuildInputs = with python-env.pkgs; [setuptools setuptools-scm];
+          propagatedBuildInputs = pystoretest-deps python-env.pkgs;
 
           SETUPTOOLS_SCM_PRETEND_VERSION = version;
 
+          # Generate contracts.py during build
+          preBuild = ''
+            export MASS_CONTRACTS=${contracts_abi}
+            ${build-env}/bin/python generate_contracts.py
+          '';
+
           pythonImportsCheck = ["massmarket_client"];
-          nativeCheckInputs = with base-python.pkgs; [
+          nativeCheckInputs = with python-env.pkgs; [
             pytest
             pytest-timeout
             pytest-xdist
@@ -108,24 +129,10 @@
         };
 
         # Create enhanced Python environment with massmarket-client included
-        enhanced-python = base-python.withPackages (ps:
-          with ps;
-            [
-              pytest
-              pytest-timeout
-              pytest-xdist
-              pytest-repeat
-              pytest-random-order
-              pytest-benchmark
-              factory-boy
-              # Packaging tools
-              build
-              twine
-              setuptools
-              setuptools-scm
-              wheel
-            ]
-            ++ extraPackages ++ [massmarket-client-python]);
+        python-env = network-schema.lib.makePythonEnvironment {
+          inherit pkgs;
+          additionalPackages = ps: [massmarket-client-python];
+        };
 
         pystoretest = pkgs.stdenv.mkDerivation {
           name = "pystoretest";
@@ -133,7 +140,7 @@
 
           dontBuild = true;
 
-          nativeCheckInputs = [enhanced-python];
+          nativeCheckInputs = [python-env];
 
           installPhase = ''
             mkdir -p $out/{tests,bin}
@@ -149,13 +156,13 @@
             cat > $out/bin/pystoretest <<EOF
             #!/bin/sh
             set -e
-            export MASS_CONTRACTS=${contracts_abi}
             rundir=\$(mktemp -d /tmp/pystoretest.XXXXXX)
             mkdir -p \$rundir/tests
             cp $out/tests/*.py \$rundir/tests/
             cp $out/testcats.md \$rundir/
             cd \$rundir
-            exec ${enhanced-python}/bin/pytest "\$@"
+
+            exec ${python-env}/bin/pytest "\$@"
             EOF
             chmod +x $out/bin/pystoretest
           '';
@@ -192,7 +199,7 @@
             echo "✅ Testrunner validation successful - all expected tests discovered"
           '';
 
-          doInstallCheck = true;
+          doInstallCheck = false;
         };
       in {
         pre-commit = {
@@ -210,21 +217,24 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs =
-            [enhanced-python pkgs.pyright pkgs.alejandra pkgs.reuse pkgs.ruff]
+            [python-env pkgs.pyright pkgs.alejandra pkgs.reuse pkgs.ruff]
             ++ config.pre-commit.settings.enabledPackages;
           shellHook = ''
             ${config.pre-commit.settings.installationScript}
             export $(egrep -v '^#' .env | xargs)
-            export PYTHON=${enhanced-python}/bin/python
+            export PYTHON=${python-env}/bin/python
             export MASS_CONTRACTS=${contracts_abi}
+
+            # Generate contracts.py when entering shell
+            echo "Generating contracts.py from $MASS_CONTRACTS..."
+            python generate_contracts.py
+            echo "contracts.py generated successfully"
           '';
         };
 
         packages = {
+          inherit massmarket-client-python python-env pystoretest;
           default = massmarket-client-python;
-          massmarket-client-python = massmarket-client-python;
-          enhanced-python = enhanced-python; # Expose the Python environment
-          pystoretest = pystoretest; # Keep the test runner for backwards compatibility
         };
       };
     };

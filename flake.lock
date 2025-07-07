@@ -293,16 +293,16 @@
         "systems": "systems_3"
       },
       "locked": {
-        "lastModified": 1752579397,
-        "narHash": "sha256-oMteduiz/PqwHCyaZcM6tqV2qUhq0YP9nodVCSpFaX8=",
+        "lastModified": 1752585103,
+        "narHash": "sha256-CWbJ4dWwKraAdU+SgV5JuiNaWS5oSH0lDLg5REr2/y8=",
         "owner": "masslbs",
         "repo": "network-schema",
-        "rev": "d871509aea925438a57600fb66484db535e7a1b9",
+        "rev": "4c7ac40e75889e9547f639d6cc6f5ad98b37664c",
         "type": "github"
       },
       "original": {
         "owner": "masslbs",
-        "ref": "v5-dev",
+        "ref": "python-env-tinker",
         "repo": "network-schema",
         "type": "github"
       }

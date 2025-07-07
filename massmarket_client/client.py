@@ -558,28 +558,24 @@ class RefactoredRelayClient:
             all_addrs = []
             # retrieve all relays nfts
             if self.shop_token_id and self.blockchain_manager:
-                try:
-                    relay_count = (
-                        self.blockchain_manager.shopReg.functions.getRelayCount(
+                print(f"shopId: {self.shop_token_id}")
+                relay_count = self.blockchain_manager.shopReg.functions.getRelayCount(
+                    self.shop_token_id
+                ).call()
+                if relay_count > 0:
+                    all_relay_token_ids = (
+                        self.blockchain_manager.shopReg.functions.getAllRelays(
                             self.shop_token_id
                         ).call()
                     )
-                    if relay_count > 0:
-                        all_relay_token_ids = (
-                            self.blockchain_manager.shopReg.functions.getAllRelays(
-                                self.shop_token_id
+                    for token_id in all_relay_token_ids:
+                        # retrieve the owner => it's address
+                        relay_address = (
+                            self.blockchain_manager.relayReg.functions.ownerOf(
+                                token_id
                             ).call()
                         )
-                        for token_id in all_relay_token_ids:
-                            # retrieve the owner => it's address
-                            relay_address = (
-                                self.blockchain_manager.relayReg.functions.ownerOf(
-                                    token_id
-                                ).call()
-                            )
-                            all_addrs.append(relay_address.lower())
-                except Exception as e:
-                    print(f"Warning: Could not fetch relay addresses: {e}")
+                        all_addrs.append(relay_address.lower())
 
             # turn key cards into addresses using shop state
             all_key_cards = self.all_key_cards  # This gets from shop state

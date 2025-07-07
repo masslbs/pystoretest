@@ -15,13 +15,9 @@ test:
 bench:
 	pytest tests/ -v --benchmark-only
 
-format:
-	black massmarket_client/ tests/ *.py
-
-lint: format
-	black --check massmarket_client/ tests/ *.py
+lint:
 	reuse lint
-	# ruff check massmarket_client/ tests/
+	ruff format massmarket_client/ tests/
 
 build:
 	${PYTHON} -m build -n

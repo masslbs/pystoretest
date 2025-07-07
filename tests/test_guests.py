@@ -26,10 +26,9 @@ import massmarket.cbor.patch as mass_patch
 
 from massmarket_client.legacy_client import (
     RelayClient,
-)  # TODO: refactor to RelayClientFactory(?)
+)
 from massmarket_client.utils import new_object_id, RelayException
 
-# from massmarket_client.client import RefactoredRelayClient
 from massmarket_client import RelayClientProtocol
 from tests.conftest import MakeClientCallable
 from tests import objfactory
@@ -66,6 +65,42 @@ def check_seed_data_path(seed_data_path: str | None, read_only: bool = False) ->
     except (OSError, PermissionError):
         pytest.skip(f"Directory {parent_dir} is not writable")
         return
+
+
+def set_token_uri(client):
+    req_id = client.get_blob_upload_url()
+    client.handle_all()
+    while "waiting" in client.outgoingRequests[req_id]:
+        print("waiting for blob upload url")
+        client.handle_all()
+        assert client.errors == 0
+    pb_resp = client.outgoingRequests[req_id]
+
+    shop_metadata = {
+        "name": "Test HTTP Cat Shop",
+        "description": "Test HTTP Cat Shop Description",
+        "image": "https://http.cat/images/202.jpg",
+    }
+
+    metadata_json = json.dumps(shop_metadata)
+    metadata_blob = metadata_json.encode("utf-8")
+    metadata_file = ("file", ("metadata.json", metadata_blob, "application/json"))
+
+    upload_response = requests.post(pb_resp["url"], files=[metadata_file])
+    assert upload_response.status_code == 201
+    upload_json = upload_response.json()
+
+    assert "url" in upload_json
+    try:
+        url_parts = urlparse(upload_json["url"])
+        assert all([url_parts.scheme, url_parts.netloc]), "Invalid URL format"
+    except Exception as e:
+        pytest.fail(f"Invalid URL: {upload_json['url']} - {str(e)}")
+
+    tx = client.transact_with_retry(
+        client.shopReg.functions.setTokenURI(client.shop_token_id, upload_json["url"])
+    )
+    client.check_tx(tx)
 
 
 def test_make_hydration_data(make_client: MakeClientCallable):
@@ -143,6 +178,8 @@ def test_make_hydration_data(make_client: MakeClientCallable):
                 )
                 # Shop data exists in relay, just recreate the NFT
                 shop_id = owner.register_shop(token_id=shop_token_id)
+                set_token_uri(owner)
+                owner.add_relay_to_shop(owner.relay_token_id)
                 owner.close()
                 pytest.skip(
                     f"Shop data already exists in relay, recreated NFT {shop_token_id}"
@@ -170,39 +207,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
     owner.enroll_key_card()
     owner.login()
 
-    req_id = owner.get_blob_upload_url()
-    owner.handle_all()
-    while "waiting" in owner.outgoingRequests[req_id]:
-        print("waiting for blob upload url")
-        owner.handle_all()
-        assert owner.errors == 0
-    pb_resp = owner.outgoingRequests[req_id]
-
-    shop_metadata = {
-        "name": "Test HTTP Cat Shop",
-        "description": "Test HTTP Cat Shop Description",
-        "image": "https://http.cat/images/202.jpg",
-    }
-
-    metadata_json = json.dumps(shop_metadata)
-    metadata_blob = metadata_json.encode("utf-8")
-    metadata_file = ("file", ("metadata.json", metadata_blob, "application/json"))
-
-    upload_response = requests.post(pb_resp["url"], files=[metadata_file])
-    assert upload_response.status_code == 201
-    upload_json = upload_response.json()
-
-    assert "url" in upload_json
-    try:
-        url_parts = urlparse(upload_json["url"])
-        assert all([url_parts.scheme, url_parts.netloc]), "Invalid URL format"
-    except Exception as e:
-        pytest.fail(f"Invalid URL: {upload_json['url']} - {str(e)}")
-
-    tx = owner.transact_with_retry(
-        owner.shopReg.functions.setTokenURI(owner.shop_token_id, upload_json["url"])
-    )
-    owner.check_tx(tx)
+    set_token_uri(owner)
 
     owner.create_shop_manifest()
     assert owner.errors == 0
