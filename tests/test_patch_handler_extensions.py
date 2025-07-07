@@ -379,8 +379,7 @@ class TestPatchHandlerObserver:
 
         # First change added payment details
         change1 = observer.changes[0]
-        # ADD operations don't capture before state
-        assert change1["before"] is None
+        assert change1["before"].id == order_id
         assert change1["after"] is not None
         assert change1["after"].payment_details is not None
 
