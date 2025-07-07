@@ -66,6 +66,7 @@ class PatchHandler:
         obj_type = patch.path.type
 
         # Extract object type and ID for observer notification
+        # TODO: dont like that we have object_type_str here
         object_type_str, object_id = self._parse_patch_path(patch)
 
         # Capture before state if we have observers and it's a relevant operation
@@ -123,10 +124,14 @@ class PatchHandler:
         elif obj_type == mass_patch.ObjectType.ACCOUNT:
             if patch.path.account_addr:
                 if isinstance(patch.path.account_addr, mass_base.EthereumAddress):
-                    addr = patch.path.account_addr.hex()
+                    addr = patch.path.account_addr.to_bytes()
+                elif isinstance(patch.path.account_addr, bytes):
+                    addr = patch.path.account_addr
                 else:
-                    addr = patch.path.account_addr.hex()
-                return "accounts", addr
+                    raise Exception(
+                        f"account address is required: {type(patch.path.account_addr)}"
+                    )
+                return "accounts", addr.hex()
         elif obj_type == mass_patch.ObjectType.INVENTORY:
             # For inventory, create compound ID
             listing_id = patch.path.object_id
@@ -219,7 +224,7 @@ class PatchHandler:
                 assert isinstance(chain_id, int)
                 assert isinstance(addr, mass_base.EthereumAddress)
                 meta = mass_base.PayeeMetadata.from_cbor_dict(patch.value)
-                self.shop.manifest.payees[chain_id][addr] = meta
+                self.shop.manifest.payees.setdefault(chain_id, {})[addr] = meta
             elif patch.path.fields[0] == "AcceptedCurrencies":
                 chain_id = int(patch.path.fields[1])
                 addr = mass_base.EthereumAddress(patch.path.fields[2])
