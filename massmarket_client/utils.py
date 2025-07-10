@@ -177,6 +177,7 @@ class AccountFaucet:
         self,
         funded_account: Account,
         initial_balance: int = Web3.to_wei(0.05, "ether"),
+        nonce_folder: str = "/tmp/pystoretest",
     ):
         self.funded_account = funded_account
         self.w3 = Web3(HTTPProvider(os.getenv("ETH_RPC_URL")))
@@ -187,9 +188,7 @@ class AccountFaucet:
 
         # Create a file-based lock in a temp directory
         temp_dir = (
-            os.getcwd()
-            if os.getcwd().startswith("/tmp/pystoretest.")
-            else "/tmp/pystoretest"
+            os.getcwd() if os.getcwd().startswith(f"{nonce_folder}.") else nonce_folder
         )
         os.makedirs(temp_dir, exist_ok=True)
         self.lock_file = os.path.join(temp_dir, "eth_test_nonce.lock")
