@@ -5,7 +5,6 @@
   description = "Mass Market Relay Testing";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     systems.url = "github:nix-systems/default";
     flake-parts.url = "github:hercules-ci/flake-parts";
     contracts.url = "github:masslbs/contracts";
@@ -14,6 +13,7 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nixpkgs.follows = "network-schema/nixpkgs";
   };
 
   outputs = inputs @ {
