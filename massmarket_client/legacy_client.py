@@ -2314,7 +2314,7 @@ class RelayClient:
             object_id=order_id,
             op=mass_patch.OpString.REPLACE,
             fields=["PaymentState"],
-            obj=mass_order.OrderPaymentState.COMMITTED,
+            obj=mass_order.OrderPaymentState.LOCKED,
             wait=self.expect_error,
         )
 

@@ -1034,6 +1034,6 @@ def test_cannot_add_unpublished_item_to_order(
     order = client.shop.orders.get(order_id)
     assert order is not None
     assert len(order.items) == 1
-    assert order.payment_state == morder.OrderPaymentState.COMMITTED
+    assert order.payment_state == morder.OrderPaymentState.LOCKED
     assert order.items[0].listing_id == listing_id
     assert order.items[0].quantity == 1

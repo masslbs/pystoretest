@@ -7,13 +7,14 @@
   inputs = {
     systems.url = "github:nix-systems/default";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    contracts.url = "github:masslbs/contracts";
-    network-schema.url = "github:masslbs/network-schema/python-env-tinker";
-    nixpkgs.follows = "network-schema/nixpkgs"; # align python versions
     pre-commit-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nixpkgs.follows = "network-schema/nixpkgs"; # align python versions
+    # mass things
+    contracts.url = "github:masslbs/contracts";
+    network-schema.url = "github:masslbs/network-schema/order-locking-states";
   };
 
   outputs = inputs @ {

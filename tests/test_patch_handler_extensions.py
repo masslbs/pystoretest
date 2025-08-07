@@ -8,7 +8,7 @@ from massmarket_client.patch_handler import PatchHandler, StateChangeObserver
 from massmarket.cbor import Shop
 from massmarket.cbor.patch import Patch, ObjectType, OpString, PatchPath
 from massmarket.cbor.manifest import Manifest
-from massmarket.cbor.order import Order, OrderedItem, AddressDetails
+from massmarket.cbor.order import Order, OrderedItem, AddressDetails, OrderPaymentState
 from massmarket.cbor.listing import Listing, ListingMetadata, ListingViewState
 from massmarket.cbor.base_types import Uint256
 import massmarket.hamt as hamt
@@ -54,7 +54,9 @@ def create_test_shop():
 def create_test_order(order_id=1, state=1):
     """Create a test order."""
     # Handle canceled state
-    canceled_at = 1234567890 if state == 2 else None  # CANCELED requires canceled_at
+    canceled_at = (
+        1234567890 if state == OrderPaymentState.CANCELED else None
+    )  # CANCELED requires canceled_at
 
     return Order(
         id=order_id,
@@ -116,7 +118,7 @@ class TestPatchHandlerObserver:
 
         # Add initial order
         order_id = 123
-        order = create_test_order(order_id, 1)  # OPEN
+        order = create_test_order(order_id, OrderPaymentState.OPEN)
         shop.orders.insert(order_id, order)
 
         # Create patch to change order state
@@ -125,7 +127,7 @@ class TestPatchHandlerObserver:
             path=PatchPath(
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentState"]
             ),
-            value=2,  # CANCELED
+            value=OrderPaymentState.CANCELED,
         )
 
         # Apply patch
@@ -137,8 +139,8 @@ class TestPatchHandlerObserver:
         change = observer.changes[0]
         assert change["type"] == "orders"
         assert change["id"] == str(order_id)
-        assert change["before"].payment_state == 1  # OPEN
-        assert change["after"].payment_state == 2  # CANCELED
+        assert change["before"].payment_state == OrderPaymentState.OPEN
+        assert change["after"].payment_state == OrderPaymentState.CANCELED
 
     def test_order_capture_on_add(self):
         """Test that order states are captured correctly on ADD operations."""
@@ -152,7 +154,7 @@ class TestPatchHandlerObserver:
         order_data = {
             "ID": order_id,
             "Items": [],
-            "PaymentState": 1,  # OPEN
+            "PaymentState": OrderPaymentState.OPEN,
         }
 
         patch = Patch(
@@ -172,7 +174,7 @@ class TestPatchHandlerObserver:
         assert change["id"] == str(order_id)
         assert change["before"] is None  # No previous state
         assert change["after"] is not None
-        assert change["after"].payment_state == 1  # OPEN
+        assert change["after"].payment_state == OrderPaymentState.OPEN
 
     def test_order_capture_on_remove(self):
         """Test that order states are captured correctly on REMOVE operations."""
@@ -183,7 +185,7 @@ class TestPatchHandlerObserver:
 
         # Add initial order
         order_id = 789
-        order = create_test_order(order_id, 2)  # CANCELED
+        order = create_test_order(order_id, OrderPaymentState.CANCELED)
         shop.orders.insert(order_id, order)
 
         # Create patch to remove order
@@ -203,7 +205,7 @@ class TestPatchHandlerObserver:
         assert change["type"] == "orders"
         assert change["id"] == str(order_id)
         assert change["before"].id == order_id
-        assert change["before"].payment_state == 2  # CANCELED
+        assert change["before"].payment_state == OrderPaymentState.CANCELED
         assert change["after"] is None  # Order was removed
 
     def test_listing_state_capture(self):
@@ -251,7 +253,7 @@ class TestPatchHandlerObserver:
 
         # Add order
         order_id = 321
-        order = create_test_order(order_id, 1)  # OPEN
+        order = create_test_order(order_id, OrderPaymentState.OPEN)
         shop.orders.insert(order_id, order)
 
         # Apply patch
@@ -260,7 +262,7 @@ class TestPatchHandlerObserver:
             path=PatchPath(
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentState"]
             ),
-            value=2,  # CANCELED
+            value=OrderPaymentState.CANCELED,
         )
 
         error = handler.apply_patch(patch)
@@ -269,8 +271,8 @@ class TestPatchHandlerObserver:
         # Both observers should be notified
         assert len(observer1.changes) == 1
         assert len(observer2.changes) == 1
-        assert observer1.changes[0]["before"].payment_state == 1  # OPEN
-        assert observer2.changes[0]["after"].payment_state == 2  # CANCELED
+        assert observer1.changes[0]["before"].payment_state == OrderPaymentState.OPEN
+        assert observer2.changes[0]["after"].payment_state == OrderPaymentState.CANCELED
 
     def test_observer_error_handling(self):
         """Test that observer errors don't affect patch application."""
@@ -287,7 +289,7 @@ class TestPatchHandlerObserver:
 
         # Add order
         order_id = 654
-        order = create_test_order(order_id, 1)  # OPEN
+        order = create_test_order(order_id, OrderPaymentState.OPEN)
         shop.orders.insert(order_id, order)
 
         # Apply patch - should succeed despite observer error
@@ -296,7 +298,7 @@ class TestPatchHandlerObserver:
             path=PatchPath(
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentState"]
             ),
-            value=2,  # CANCELED
+            value=OrderPaymentState.CANCELED,
         )
 
         error = handler.apply_patch(patch)
@@ -304,7 +306,7 @@ class TestPatchHandlerObserver:
 
         # Verify patch was applied
         updated_order = shop.orders.get(order_id)
-        assert updated_order.payment_state == 2  # CANCELED
+        assert updated_order.payment_state == OrderPaymentState.CANCELED
 
     def test_no_notification_without_observers(self):
         """Test that state capture doesn't happen without observers."""
@@ -322,7 +324,7 @@ class TestPatchHandlerObserver:
             path=PatchPath(
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentState"]
             ),
-            value=2,  # CANCELED
+            value=OrderPaymentState.CANCELED,
         )
 
         error = handler.apply_patch(patch)
@@ -330,7 +332,7 @@ class TestPatchHandlerObserver:
 
         # Verify patch was applied
         updated_order = shop.orders.get(order_id)
-        assert updated_order.payment_state == 2  # CANCELED
+        assert updated_order.payment_state == OrderPaymentState.CANCELED
 
     def test_complex_order_state_changes(self):
         """Test capturing complex order state changes."""
@@ -341,7 +343,7 @@ class TestPatchHandlerObserver:
 
         # Add order
         order_id = 111
-        order = create_test_order(order_id, 1)  # OPEN
+        order = create_test_order(order_id, OrderPaymentState.OPEN)
         shop.orders.insert(order_id, order)
 
         # Add payment details
@@ -368,7 +370,7 @@ class TestPatchHandlerObserver:
             path=PatchPath(
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentState"]
             ),
-            value=2,  # CANCELED
+            value=OrderPaymentState.CANCELED,
         )
 
         error = handler.apply_patch(patch2)
@@ -385,8 +387,8 @@ class TestPatchHandlerObserver:
 
         # Second change updated payment state
         change2 = observer.changes[1]
-        assert change2["before"].payment_state == 1  # OPEN
-        assert change2["after"].payment_state == 2  # CANCELED
+        assert change2["before"].payment_state == OrderPaymentState.OPEN
+        assert change2["after"].payment_state == OrderPaymentState.CANCELED
 
 
 class TestCaduceusIntegration:
@@ -404,7 +406,8 @@ class TestCaduceusIntegration:
                 if object_type == "orders" and before and after:
                     # Detect OPEN -> CANCELED transition
                     if (
-                        before.payment_state == 1 and after.payment_state == 2
+                        before.payment_state == OrderPaymentState.OPEN
+                        and after.payment_state == OrderPaymentState.CANCELED
                     ):  # OPEN -> CANCELED
                         self.order_confirmations.append((object_id, after))
 
@@ -423,7 +426,7 @@ class TestCaduceusIntegration:
 
         # Create order
         order_id = 999
-        order = create_test_order(order_id, 1)  # OPEN
+        order = create_test_order(order_id, OrderPaymentState.OPEN)
         shop.orders.insert(order_id, order)
 
         # Simulate payment
@@ -432,7 +435,7 @@ class TestCaduceusIntegration:
             path=PatchPath(
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentState"]
             ),
-            value=2,  # CANCELED
+            value=OrderPaymentState.CANCELED,
         )
 
         error = handler.apply_patch(patch)
@@ -442,5 +445,6 @@ class TestCaduceusIntegration:
         assert len(caduceus_observer.order_confirmations) == 1
         assert caduceus_observer.order_confirmations[0][0] == str(order_id)
         assert (
-            caduceus_observer.order_confirmations[0][1].payment_state == 2
-        )  # CANCELED
+            caduceus_observer.order_confirmations[0][1].payment_state
+            == OrderPaymentState.CANCELED
+        )
