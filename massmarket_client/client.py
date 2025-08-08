@@ -811,6 +811,12 @@ class RefactoredRelayClient:
             raise Exception("No shop operations initialized")
         self.shop_operations.abandon_order(order_id)
 
+    def reopen_order(self, order_id):
+        """Reopen a locked order back to OPEN state."""
+        if not self.shop_operations:
+            raise Exception("No shop operations initialized")
+        self.shop_operations.reopen_order(order_id)
+
     def update_address_for_order(self, order_id, invoice=None, shipping=None):
         """Update address for an order."""
         if not self.shop_operations:

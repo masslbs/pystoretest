@@ -2276,6 +2276,19 @@ class RelayClient:
         if not was_batching:
             self.flush_batch()
 
+    def reopen_order(self, order_id):
+        assert self.shop is not None, "shop not initialized"
+        if not self.expect_error and not self.shop.orders.has(order_id):
+            raise Exception(f"Unknown order: {order_id}")
+
+        self._write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.OPEN,
+        )
+
     def update_address_for_order(self, order_id, invoice=None, shipping=None):
         assert self.shop is not None, "shop not initialized"
         if not self.expect_error and not self.shop.orders.has(order_id):

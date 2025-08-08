@@ -1230,3 +1230,346 @@ def test_orders_item_locking_with_removal(
     assert bob_order is not None
     assert len(bob_order.items) == 1  # caps
     assert bob_order.items[0].listing_id == caps_id
+
+
+def test_order_reopen_happy_path(make_client: MakeClientCallable):
+    """Test that locked orders can be reopened before payment_chosen."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Create listing and order
+    oid, iid1, iid2 = prepare_order(alice)
+
+    # Commit the order to lock it
+    alice.commit_items(oid)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    # Verify order is locked
+    order = alice.shop.orders.get(oid)
+    assert order is not None
+    assert order.payment_state == morder.OrderPaymentState.LOCKED
+
+    # Reopen the order - should succeed
+    alice.reopen_order(oid)
+    assert alice.errors == 0
+
+    # Verify order is now open again
+    alice.handle_all()
+    order = alice.shop.orders.get(oid)
+    assert order is not None
+    assert order.payment_state == morder.OrderPaymentState.OPEN
+
+    # Should be able to add more items when reopened
+    alice.add_to_order(oid, iid1, 1)
+    assert alice.errors == 0
+
+    # Should be able to commit again
+    alice.commit_items(oid)
+    assert alice.errors == 0
+
+
+def test_order_reopen_multiple_states(make_client: MakeClientCallable):
+    """Test reopening orders from various locked states."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Test 1: Reopen from LOCKED state
+    oid1, iid1, _ = prepare_order(alice)
+    alice.commit_items(oid1)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    order = alice.shop.orders.get(oid1)
+    assert order.payment_state == morder.OrderPaymentState.LOCKED
+
+    alice.reopen_order(oid1)
+    assert alice.errors == 0
+    alice.handle_all()
+
+    order = alice.shop.orders.get(oid1)
+    assert order.payment_state == morder.OrderPaymentState.OPEN
+
+    # Test 2: Commit, add address, then reopen
+    alice.commit_items(oid1)
+    alice.update_address_for_order(oid1, invoice=default_addr)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    alice.reopen_order(oid1)
+    assert alice.errors == 0
+    alice.handle_all()
+
+    order = alice.shop.orders.get(oid1)
+    assert order.payment_state == morder.OrderPaymentState.OPEN
+
+
+def test_order_reopen_error_after_payment_chosen(make_client: MakeClientCallable):
+    """Test that orders cannot be reopened after payment_chosen state."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Prepare and finalize order to PAYMENT_CHOSEN state
+    oid, _, _ = prepare_order(alice)
+    alice.commit_items(oid)
+    alice.update_address_for_order(oid, invoice=default_addr)
+    alice.choose_payment(oid)
+    assert alice.errors == 0
+
+    # Verify order is in PAYMENT_CHOSEN state
+    order = wait_for_finalization(alice, oid)
+    assert order.payment_state == morder.OrderPaymentState.UNPAID  # After finalization
+
+    # Try to reopen - should fail
+    alice.expect_error = True
+    alice.reopen_order(oid)
+    assert alice.errors == 1
+    assert alice.last_error is not None
+    assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
+
+
+def test_order_reopen_error_after_paid(make_client: MakeClientCallable):
+    """Test that paid orders cannot be reopened."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Prepare, finalize and pay order
+    oid, iid1, iid2 = prepare_order(alice)
+    alice.commit_items(oid)
+    alice.update_address_for_order(oid, invoice=default_addr)
+    alice.choose_payment(oid)
+    assert alice.errors == 0
+
+    order = wait_for_finalization(alice, oid)
+    total = int(order.payment_details.total)
+
+    # Pay the order
+    pr = {
+        "ttl": int(order.payment_details.ttl),
+        "order": bytes(32),
+        "currency": "0x" + "00" * 20,
+        "amount": total,
+        "payeeAddress": alice.account.address,
+        "chainId": 31337,
+        "isPaymentEndpoint": False,
+        "shopId": int(alice.shop_token_id),
+        "shopSignature": "0x" + "00" * 64,
+    }
+
+    tx = alice.payments.functions.pay(pr).transact({"value": total})
+    alice.check_tx(tx)
+    wait_for_order_paid(alice, oid, [(iid1, 2), (iid2, 3)])
+
+    # Verify order is paid
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.PAID
+
+    # Try to reopen - should fail
+    alice.expect_error = True
+    alice.reopen_order(oid)
+    assert alice.errors == 1
+    assert alice.last_error is not None
+    assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
+
+
+def test_order_reopen_error_after_canceled(make_client: MakeClientCallable):
+    """Test that canceled orders cannot be reopened."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Prepare and cancel order
+    oid, _, _ = prepare_order(alice)
+    alice.commit_items(oid)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    alice.abandon_order(oid)
+    assert alice.errors == 0
+    alice.handle_all()
+
+    # Verify order is canceled
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.CANCELED
+
+    # Try to reopen - should fail
+    alice.expect_error = True
+    alice.reopen_order(oid)
+    assert alice.errors == 1
+    assert alice.last_error is not None
+    assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
+
+
+def test_order_can_only_cancel_after_payment_chosen(make_client: MakeClientCallable):
+    """Test that after payment_chosen, orders can only be canceled, not modified."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Prepare order to PAYMENT_CHOSEN state
+    oid, iid1, _ = prepare_order(alice)
+    alice.commit_items(oid)
+    alice.update_address_for_order(oid, invoice=default_addr)
+    alice.choose_payment(oid)
+    assert alice.errors == 0
+
+    # Wait for order to be finalized (UNPAID state)
+    order = wait_for_finalization(alice, oid)
+    assert order.payment_state == morder.OrderPaymentState.UNPAID
+
+    # Try to add items - should fail
+    alice.expect_error = True
+    alice.add_to_order(oid, iid1, 1)
+    assert alice.errors == 1
+    assert alice.last_error is not None
+    assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
+
+    # Reset error state
+    alice.expect_error = False
+    alice.errors = 0
+    alice.last_error = None
+
+    # Try to remove items - should fail
+    alice.expect_error = True
+    alice.remove_from_order(oid, iid1, 1)
+    assert alice.errors == 1
+    assert alice.last_error is not None
+    assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
+
+    # Reset error state
+    alice.expect_error = False
+    alice.errors = 0
+    alice.last_error = None
+
+    # But cancel should still work
+    alice.abandon_order(oid)
+    assert alice.errors == 0
+    alice.handle_all()
+
+    # Verify order is now canceled
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.CANCELED
+
+
+def test_order_locking_inventory_release_on_reopen(
+    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+):
+    """Test that inventory is released when an order is reopened."""
+    alice, bob = make_two_clients
+
+    # Create listing with limited inventory
+    caps_id = alice.create_listing("caps", 1)
+    alice.change_inventory(caps_id, 2)  # Only 2 items
+    assert alice.errors == 0
+
+    # Alice creates and commits an order (locks 1 item)
+    order_id1 = alice.create_order()
+    alice.add_to_order(order_id1, caps_id, 1)
+    alice.commit_items(order_id1)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    # Bob tries to order 2 items - should fail due to insufficient inventory
+    order_id2 = bob.create_order()
+    bob.add_to_order(order_id2, caps_id, 2)
+    bob.expect_error = True
+    bob.commit_items(order_id2)
+    assert bob.errors == 1
+    assert bob.last_error.code == error_pb2.ERROR_CODES_OUT_OF_STOCK
+
+    # Reset Bob's error state
+    bob.expect_error = False
+    bob.errors = 0
+    bob.last_error = None
+
+    # Alice reopens her order (should release the locked inventory)
+    alice.reopen_order(order_id1)
+    assert alice.errors == 0
+    bob.handle_all()
+    assert bob.errors == 0
+
+    # Now Bob should be able to commit his 2-item order
+    bob.commit_items(order_id2)
+    assert bob.errors == 0
+
+
+def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
+    """Test comprehensive order state transitions with reopen functionality."""
+    alice: RelayClientProtocol = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Create order - starts in OPEN
+    oid, iid1, _ = prepare_order(alice)
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.OPEN
+
+    # OPEN -> LOCKED (commit)
+    alice.commit_items(oid)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.LOCKED
+
+    # LOCKED -> OPEN (reopen)
+    alice.reopen_order(oid)
+    assert alice.errors == 0
+    alice.handle_all()
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.OPEN
+
+    # OPEN -> LOCKED -> address -> still LOCKED
+    alice.commit_items(oid)
+    alice.update_address_for_order(oid, invoice=default_addr)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.LOCKED
+
+    # LOCKED -> OPEN (reopen after address)
+    alice.reopen_order(oid)
+    assert alice.errors == 0
+    alice.handle_all()
+    order = alice.shop.orders.get(oid)
+    assert order.payment_state == morder.OrderPaymentState.OPEN
+
+    # OPEN -> LOCKED -> PAYMENT_CHOSEN -> UNPAID (no reopen possible)
+    alice.commit_items(oid)
+    alice.update_address_for_order(oid, invoice=default_addr)
+    alice.choose_payment(oid)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    order = wait_for_finalization(alice, oid)
+    assert order.payment_state == morder.OrderPaymentState.UNPAID
+
+    # Cannot reopen after PAYMENT_CHOSEN
+    alice.expect_error = True
+    alice.reopen_order(oid)
+    assert alice.errors == 1
+    assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID

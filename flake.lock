@@ -293,11 +293,11 @@
         "systems": "systems_3"
       },
       "locked": {
-        "lastModified": 1754554265,
-        "narHash": "sha256-1qBig4goHkmuzCEy6R6fQOPibSZy0DZOM8aNhGDkoHM=",
+        "lastModified": 1756286342,
+        "narHash": "sha256-s734Zb9hkhlfDvN3k56CZpjHaNrJ5MxYx3vNmdrNdmM=",
         "owner": "masslbs",
         "repo": "network-schema",
-        "rev": "c5847951cf3f68ea958b579cd4c3c830addc3719",
+        "rev": "a3e0d2517ff280dbb37d98235f2241ea34b8660b",
         "type": "github"
       },
       "original": {
@@ -470,11 +470,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1754416808,
-        "narHash": "sha256-c6yg0EQ9xVESx6HGDOCMcyRSjaTpNJP10ef+6fRcofA=",
+        "lastModified": 1755960406,
+        "narHash": "sha256-RF7j6C1TmSTK9tYWO6CdEMtg6XZaUKcvZwOCD2SICZs=",
         "owner": "cachix",
         "repo": "git-hooks.nix",
-        "rev": "9c52372878df6911f9afc1e2a1391f55e4dfc864",
+        "rev": "e891a93b193fcaf2fc8012d890dc7f0befe86ec2",
         "type": "github"
       },
       "original": {

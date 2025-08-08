@@ -551,6 +551,21 @@ class ShopOperations:
         if not was_batching:
             self.patch_manager.flush_batch()
 
+    def reopen_order(self, order_id):
+        """Reopen a locked order back to OPEN state."""
+        if self.state_manager:
+            shop = self.state_manager.get_shop()
+            if not self.expect_error and not shop.orders.has(order_id):
+                raise Exception(f"Unknown order: {order_id}")
+
+        self.patch_manager.write_patch(
+            type=mass_patch.ObjectType.ORDER,
+            object_id=order_id,
+            op=mass_patch.OpString.REPLACE,
+            fields=["PaymentState"],
+            obj=mass_order.OrderPaymentState.OPEN,
+        )
+
     def update_address_for_order(self, order_id, invoice=None, shipping=None):
         """Update address for an order."""
         if self.state_manager:
