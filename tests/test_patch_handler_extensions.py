@@ -353,11 +353,8 @@ class TestPatchHandlerObserver:
                 type=ObjectType.ORDER, object_id=order_id, fields=["PaymentDetails"]
             ),
             value={
-                "PaymentID": bytes(32),  # 32 bytes hash
                 "Total": 2000,
-                "ListingHashes": [bytes(32)],  # List of hashes
-                "TTL": 1234567890,
-                "ShopSignature": bytes(65),  # 65 bytes signature
+                "PaymentAddress": {"ChainID": 555, "Address": bytes(20)},
             },
         )
 

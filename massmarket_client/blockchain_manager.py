@@ -54,7 +54,7 @@ class BlockchainManager:
 
         # Load Payments contract
         self.payments = self.w3.eth.contract(
-            address=addresses["Payments"], abi=ABIS["PaymentsByAddress"]
+            address=addresses["OrderPaymentsFactory"], abi=ABIS["OrderPaymentsFactory"]
         )
 
     def check_tx(self, tx):

@@ -13,8 +13,8 @@
     };
     nixpkgs.follows = "network-schema/nixpkgs"; # align python versions
     # mass things
-    contracts.url = "github:masslbs/contracts";
-    network-schema.url = "github:masslbs/network-schema/v5-dev";
+    contracts.url = "github:masslbs/contracts/Order-Payments";
+    network-schema.url = "github:masslbs/network-schema/new-payment-binding";
   };
 
   outputs = inputs @ {

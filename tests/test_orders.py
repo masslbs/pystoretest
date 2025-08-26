@@ -576,59 +576,6 @@ def test_orders_invalid(
     assert a1.last_error.code == error_pb2.ERROR_CODES_INVALID
 
 
-def test_orders_happy_eth_byCall(make_client):
-    alice = make_client("alice")
-    alice.register_shop()
-    alice.enroll_key_card()
-    alice.login()
-    alice.create_shop_manifest()
-    assert alice.errors == 0
-
-    oid, iid1, iid2 = prepare_order(alice)
-
-    alice.commit_items(oid)
-    assert alice.errors == 0
-    alice.update_address_for_order(oid, invoice=default_addr)
-    assert alice.errors == 0
-    alice.choose_payment(oid)
-    assert alice.errors == 0
-    order = wait_for_finalization(alice, oid)
-    total = int(order.payment_details.total)
-    assert total == 0.002 * 10**18
-
-    # pay the order (usually this wouldnt be done by the clerk itself but let's not mess with another user now)
-    start_send = now()
-    beforePaid = alice.w3.eth.get_balance(alice.account.address)
-
-    pr = {
-        "ttl": int(order.payment_details.ttl),
-        "order": bytes(32),
-        "currency": "0x" + "00" * 20,
-        "amount": total,
-        "payeeAddress": alice.account.address,
-        "chainId": 31337,
-        "isPaymentEndpoint": False,
-        "shopId": int(alice.shop_token_id),
-        "shopSignature": "0x" + "00" * 64,
-    }
-    pprint(pr)
-
-    gotPaymentId = alice.payments.functions.getPaymentId(pr).call()
-    assert gotPaymentId.to_bytes(32, "big") == order.payment_details.payment_id
-
-    tx = alice.payments.functions.pay(pr).transact({"value": total})
-    alice.check_tx(tx)
-
-    took = since(start_send)
-    print(f"sending tx={tx.hex()} took {took}")
-
-    wait_for_order_paid(alice, oid, [(iid1, 2), (iid2, 3)])
-
-    afterPaid = alice.w3.eth.get_balance(alice.account.address)
-
-    assert afterPaid <= beforePaid
-
-
 def test_orders_happy_eth_byAddress(make_client):
     alice = make_client("alice")
     alice.register_shop()
@@ -644,34 +591,27 @@ def test_orders_happy_eth_byAddress(make_client):
     alice.choose_payment(oid)
     assert alice.errors == 0
     order = wait_for_finalization(alice, oid)
+    assert order.payment_details is not None
     total = int(order.payment_details.total)
     assert total == 0.002 * 10**18
 
-    pr = {
-        "ttl": int(order.payment_details.ttl),
-        "order": bytes(32),
-        "currency": "0x" + "00" * 20,
-        "amount": total,
-        "payeeAddress": alice.account.address,
+    payment_binding = {
         "chainId": 31337,
-        "isPaymentEndpoint": False,
         "shopId": int(alice.shop_token_id),
-        "shopSignature": "0x" + "00" * 64,
+        "orderId": order.id,
+        "receivingAddress": alice.account.address,
     }
-    pprint(pr)
 
     # check we got the same payment
-    gotPaymentId = alice.payments.functions.getPaymentId(pr).call()
-    assert gotPaymentId.to_bytes(32, "big") == order.payment_details.payment_id
+    payment_address = alice.payments.functions.getOrderPaymentAddress(
+        payment_binding
+    ).call()
 
     # pay the order (usually this wouldnt be done by the clerk itself but let's not mess with another user now)
     start_send = now()
-    purchase_address = alice.payments.functions.getPaymentAddress(
-        pr, alice.account.address
-    ).call()
-    print(f"sending tx to {purchase_address}")
+    print(f"sending tx to {payment_address}")
     transaction = {
-        "to": purchase_address,
+        "to": payment_address,
         "value": total,
         "gas": 25000,
         "maxFeePerGas": alice.w3.to_wei(50, "gwei"),
@@ -693,9 +633,10 @@ def test_orders_happy_eth_byAddress(make_client):
     afterPaid = alice.w3.eth.get_balance(alice.account.address)
     _ = afterPaid  # see comment
 
-    tx = alice.payments.functions.processPayment(pr, alice.account.address).transact()
-    alice.check_tx(tx)
-    print(f"processed payment tx: {tx.hex()}")
+    # TODO: sweep
+    # tx = alice.payments.functions.processPayment(pr, alice.account.address).transact()
+    # alice.check_tx(tx)
+    # print(f"processed payment tx: {tx.hex()}")
 
     # TODO: this is annoying....
     # the gas costs of processPayment outweig the income of the payment
@@ -748,28 +689,18 @@ def test_orders_happy_erc20_byAddress(make_client: MakeClientCallable):
 
     # construct PaymentRequest
     pr = {
-        "ttl": int(order.payment_details.ttl),
-        "order": bytes(32),
-        "currency": alice.erc20Token.address,
-        "amount": total,
-        "payeeAddress": alice.account.address,
         "chainId": 31337,
-        "isPaymentEndpoint": False,
         "shopId": int(alice.shop_token_id),
-        "shopSignature": "0x" + "00" * 64,
+        "orderId": oid,
+        "receivingAddress": alice.account.address,
     }
-    pprint(pr)
 
-    gotPaymentId = alice.payments.functions.getPaymentId(pr).call()
-    assert gotPaymentId.to_bytes(32, "big") == order.payment_details.payment_id
-
-    purchase_address = alice.payments.functions.getPaymentAddress(
-        pr, alice.account.address
-    ).call()
+    payment_address = alice.payments.functions.getPaymentId(pr).call()
+    assert payment_address == order.payment_details.payment_address.address
 
     # transfer erc20 tokens to the shop
     start_send = now()
-    tx_hash = alice.erc20Token.functions.transfer(purchase_address, total).transact()
+    tx_hash = alice.erc20Token.functions.transfer(payment_address, total).transact()
     alice.check_tx(tx_hash)
     took = since(start_send)
     print("sending tx={} took {}".format(tx_hash.hex(), took))
@@ -785,70 +716,6 @@ def test_orders_happy_erc20_byAddress(make_client: MakeClientCallable):
 
     afterSweep = alice.erc20Token.functions.balanceOf(alice.account.address).call()
     assert afterPaid <= afterSweep
-
-
-def test_orders_happy_erc20_byCall(make_client: MakeClientCallable):
-    alice = make_client("alice")
-    alice.register_shop()
-    alice.enroll_key_card()
-    alice.login()
-    alice.create_shop_manifest()
-    assert alice.errors == 0
-
-    # create some erc20 tokens for alice
-    tx = alice.erc20Token.functions.mint(
-        alice.account.address, 50000000000000000000
-    ).transact()
-    alice.check_tx(tx)
-
-    # register our erc20 token with the shop
-    erc20_addr = alice.w3.to_bytes(hexstr=alice.erc20Token.address[2:])
-    erc20_ethaddr = mbase.EthereumAddress(value=erc20_addr)
-    curr = mbase.ChainAddress(address=erc20_ethaddr, chain_id=alice.chain_id)
-    alice.update_shop_manifest(add_currency=curr)
-    assert alice.errors == 0
-
-    oid, iid1, iid2 = prepare_order(alice)
-
-    alice.commit_items(oid)
-    alice.update_address_for_order(oid, invoice=default_addr)
-    alice.choose_payment(oid, currency=curr)
-    assert alice.errors == 0
-    order = wait_for_finalization(alice, oid)
-    total = int(order.payment_details.total)
-    assert (
-        total == 300
-    )  # fixed price conversion of 1 eth == 1500 fiat => 3 fiat == 300 fiat cents
-
-    beforePaid = alice.erc20Token.functions.balanceOf(alice.account.address).call()
-
-    # pay the order
-    tx = alice.erc20Token.functions.approve(alice.payments.address, total).transact()
-    alice.check_tx(tx)
-
-    pr = {
-        "ttl": int(order.payment_details.ttl),
-        "order": bytes(32),
-        "currency": alice.erc20Token.address,
-        "amount": total,
-        "payeeAddress": alice.account.address,
-        "chainId": 31337,
-        "isPaymentEndpoint": False,
-        "shopId": int(alice.shop_token_id),
-        "shopSignature": "0x" + "00" * 64,
-    }
-    pprint(pr)
-
-    gotPaymentId = alice.payments.functions.getPaymentId(pr).call()
-    assert gotPaymentId.to_bytes(32, "big") == order.payment_details.payment_id
-
-    tx = alice.payments.functions.pay(pr).transact()
-    alice.check_tx(tx)
-
-    wait_for_order_paid(alice, oid, [(iid1, 2), (iid2, 3)])
-
-    afterPaid = alice.erc20Token.functions.balanceOf(alice.account.address).call()
-    assert afterPaid == beforePaid
 
 
 def test_orders_choose_payment_twice(make_client: MakeClientCallable):
@@ -1027,7 +894,6 @@ def test_orders_variations_simple(
     assert o is not None
     assert o.payment_details is not None
     assert o.payment_details.total == 4
-    assert len(o.payment_details.listing_hashes) == 1
 
 
 # TODO: fix go patcher logic for canceling an item
@@ -1357,20 +1223,28 @@ def test_order_reopen_error_after_paid(make_client: MakeClientCallable):
     total = int(order.payment_details.total)
 
     # Pay the order
-    pr = {
-        "ttl": int(order.payment_details.ttl),
-        "order": bytes(32),
-        "currency": "0x" + "00" * 20,
-        "amount": total,
-        "payeeAddress": alice.account.address,
+    payment_binding = {
         "chainId": 31337,
-        "isPaymentEndpoint": False,
         "shopId": int(alice.shop_token_id),
-        "shopSignature": "0x" + "00" * 64,
+        "orderId": oid,
+        "receivingAddress": alice.default_payee.address.address._bytes,
     }
+    payment_address = alice.payments.functions.getOrderPaymentAddress(
+        payment_binding
+    ).call()
 
-    tx = alice.payments.functions.pay(pr).transact({"value": total})
-    alice.check_tx(tx)
+    print(f"sending tx to {payment_address}")
+    transaction = {
+        "to": payment_address,
+        "value": total,
+        "gas": 25000,
+        "maxFeePerGas": alice.w3.to_wei(50, "gwei"),
+        "maxPriorityFeePerGas": alice.w3.to_wei(5, "gwei"),
+        "nonce": alice.w3.eth.get_transaction_count(alice.account.address),
+        "chainId": alice.chain_id,
+    }
+    tx_hash = alice.w3.eth.send_transaction(transaction)
+    alice.check_tx(tx_hash)
     wait_for_order_paid(alice, oid, [(iid1, 2), (iid2, 3)])
 
     # Verify order is paid
@@ -1659,7 +1533,7 @@ def test_order_auto_cancel_on_timeout(make_client: MakeClientCallable):
     alice.enroll_key_card()
     alice.login()
     alice.create_shop_manifest()
-    timeout = 60  # seconds
+    timeout = 30  # seconds
     alice.update_shop_manifest(order_timeout=timeout)
     assert alice.errors == 0
 

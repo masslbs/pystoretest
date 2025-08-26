@@ -36,7 +36,8 @@ def generate_contracts_module(contracts_path: str, output_path: str):
         "RelayReg.json",
         "ShopReg.json",
         "Eddies.json",
-        "PaymentsByAddress.json",
+        "OrderPayment.json",
+        "OrderPaymentsFactory.json",
     ]
     abis = {}
 
@@ -71,14 +72,17 @@ SHOP_REG_ABI = {repr(abis["ShopReg"])}
 
 EDDIES_ABI = {repr(abis["Eddies"])}
 
-PAYMENTS_BY_ADDRESS_ABI = {repr(abis["PaymentsByAddress"])}
+ORDER_PAYMENT_ABI = {repr(abis["OrderPayment"])}
+
+ORDER_PAYMENTS_FACTORY_ABI = {repr(abis["OrderPaymentsFactory"])}
 
 # Convenience mapping for easy access
 ABIS = {{
     "RelayReg": RELAY_REG_ABI,
     "ShopReg": SHOP_REG_ABI,
     "Eddies": EDDIES_ABI,
-    "PaymentsByAddress": PAYMENTS_BY_ADDRESS_ABI,
+    "OrderPayment": ORDER_PAYMENT_ABI,
+    "OrderPaymentsFactory": ORDER_PAYMENTS_FACTORY_ABI,
 }}
 '''
 
@@ -106,12 +110,7 @@ def main():
     if len(sys.argv) > 1:
         output_path = Path(sys.argv[1])
 
-    try:
-        generate_contracts_module(contracts_path, output_path)
-        print(f"Successfully generated {output_path}")
-    except Exception as e:
-        print(f"Error generating contracts module: {e}", file=sys.stderr)
-        sys.exit(1)
+    generate_contracts_module(contracts_path, output_path)
 
 
 if __name__ == "__main__":

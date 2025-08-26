@@ -4,7 +4,6 @@
 
 from pathlib import Path
 import os
-from pprint import pprint
 import json
 import requests
 import cbor2
@@ -628,21 +627,18 @@ def test_guest_commit_other_users_order(
     int_total = int(order.payment_details.total)
     assert int_total == 2
     # order has payment details
-    pr = {
-        "ttl": int(order.payment_details.ttl),
-        "order": bytes(32),
-        "currency": clerk.default_currency.address.to_bytes(),
-        "amount": int_total,
-        "payeeAddress": clerk.default_payee.address.address.to_bytes(),
-        "chainId": clerk.chain_id,
-        "isPaymentEndpoint": False,
+    bind = {
+        "chainId": clerk.default_payee.address.chain_id,
         "shopId": int(clerk.shop_token_id),
-        "shopSignature": "0x" + "00" * 64,
+        "orderId": order.id,
+        "receivingAddress": clerk.default_payee.address.address.to_bytes(),
     }
-    pprint(pr)
 
-    gotPaymentId = guest1.payments.functions.getPaymentId(pr).call()
-    assert gotPaymentId.to_bytes(32, "big") == order.payment_details.payment_id
+    gotPaymentAddr = guest1.payments.functions.getOrderPaymentAddress(bind).call()
+    assert (
+        gotPaymentAddr.lower()
+        == order.payment_details.payment_address.address.__str__()
+    )
 
     # guest2 tries to abandon guest1's order
     guest2.abandon_order(order1)
