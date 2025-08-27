@@ -13,8 +13,7 @@ import massmarket.cbor.order as morder
 import massmarket.cbor.listing as mlisting
 import massmarket.cbor.patch as mpatch
 
-# from massmarket_client.legacy_client import RelayClient
-from massmarket_client import RelayClientProtocol
+from massmarket_client import RelayClient
 from massmarket_client.utils import new_object_id
 import copy
 from tests.conftest import MakeClientCallable
@@ -33,7 +32,7 @@ def new_uint256(i):
     return mbase.Uint256(value=i)
 
 
-def prepare_order(c: RelayClientProtocol):
+def prepare_order(c: RelayClient):
     assert c.shop is not None, "shop not initialized"
     # a1 writes an a few events
     iid1 = c.create_listing("sneakers", int(0.001 * 10**18))  # 0.001 ETH
@@ -70,7 +69,7 @@ def prepare_order(c: RelayClientProtocol):
     return oid, iid1, iid2
 
 
-def wait_for_finalization(c: RelayClientProtocol, order_id: int):
+def wait_for_finalization(c: RelayClient, order_id: int):
     assert c.shop is not None, "shop not initialized"
     for _ in range(5):
         c.handle_all()
@@ -86,7 +85,7 @@ def wait_for_finalization(c: RelayClientProtocol, order_id: int):
     raise Exception("order not finalized in time")
 
 
-def wait_for_order_paid(c: RelayClientProtocol, oid: int, items, ping=None, retry=15):
+def wait_for_order_paid(c: RelayClient, oid: int, items, ping=None, retry=15):
     assert c.shop is not None, "shop not initialized"
     # wait for payment to be processed
     for _ in range(retry):
@@ -154,7 +153,7 @@ region_tax_and_ship = mbase.ShippingRegion(
 
 # this is some helper code to create a bunch of unpayed orders for a relay refactor
 def test_orders_unpayed(make_client: MakeClientCallable):
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -192,7 +191,7 @@ def test_orders_unpayed(make_client: MakeClientCallable):
 
 
 def test_orders_no_currency(make_client: MakeClientCallable):
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -227,7 +226,7 @@ def test_orders_no_currency(make_client: MakeClientCallable):
 
 
 def test_orders_nonexistent_items(make_client: MakeClientCallable):
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -278,7 +277,7 @@ def test_orders_nonexistent_items(make_client: MakeClientCallable):
 
 
 def test_orders_no_matching_region(make_client: MakeClientCallable):
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -320,7 +319,7 @@ def test_orders_no_matching_region(make_client: MakeClientCallable):
 
 
 def test_orders_shipping_costs(make_client: MakeClientCallable):
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -361,7 +360,7 @@ def test_orders_shipping_costs(make_client: MakeClientCallable):
 
 
 def test_orders_shipping_address(make_client: MakeClientCallable):
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -481,7 +480,7 @@ def test_clerk_check_shipping_region(make_client: MakeClientCallable):
 
 
 def test_orders_invalid(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
     make_client: MakeClientCallable,
 ):
     a1, a2 = make_two_clients
@@ -892,7 +891,7 @@ def test_orders_choose_payment_twice(make_client: MakeClientCallable):
 
 
 def test_orders_item_locking(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     alice, bob = make_two_clients
 
@@ -970,7 +969,7 @@ def test_orders_item_locking(
 
 
 def test_orders_variations_simple(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     alice, bob = make_two_clients
 
@@ -1033,7 +1032,7 @@ def test_orders_variations_simple(
 
 # TODO: fix go patcher logic for canceling an item
 def skip_test_orders_variations_cancel_on_remove(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     alice, bob = make_two_clients
 
@@ -1087,9 +1086,7 @@ def skip_test_orders_variations_cancel_on_remove(
 
 
 def test_order_not_committed(
-    make_two_guests: Tuple[
-        RelayClientProtocol, RelayClientProtocol, RelayClientProtocol
-    ],
+    make_two_guests: Tuple[RelayClient, RelayClient, RelayClient],
 ):
     clerk, guest1, guest2 = make_two_guests
 
@@ -1145,7 +1142,7 @@ def test_order_not_committed(
 
 
 def test_orders_item_locking_with_removal(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     alice, bob = make_two_clients
 
@@ -1234,7 +1231,7 @@ def test_orders_item_locking_with_removal(
 
 def test_order_reopen_happy_path(make_client: MakeClientCallable):
     """Test that locked orders can be reopened before payment_chosen."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -1275,7 +1272,7 @@ def test_order_reopen_happy_path(make_client: MakeClientCallable):
 
 def test_order_reopen_multiple_states(make_client: MakeClientCallable):
     """Test reopening orders from various locked states."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -1314,7 +1311,7 @@ def test_order_reopen_multiple_states(make_client: MakeClientCallable):
 
 def test_order_reopen_error_after_payment_chosen(make_client: MakeClientCallable):
     """Test that orders cannot be reopened after payment_chosen state."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -1342,7 +1339,7 @@ def test_order_reopen_error_after_payment_chosen(make_client: MakeClientCallable
 
 def test_order_reopen_error_after_paid(make_client: MakeClientCallable):
     """Test that paid orders cannot be reopened."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -1390,7 +1387,7 @@ def test_order_reopen_error_after_paid(make_client: MakeClientCallable):
 
 def test_order_reopen_error_after_canceled(make_client: MakeClientCallable):
     """Test that canceled orders cannot be reopened."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -1421,7 +1418,7 @@ def test_order_reopen_error_after_canceled(make_client: MakeClientCallable):
 
 def test_order_can_only_cancel_after_payment_chosen(make_client: MakeClientCallable):
     """Test that after payment_chosen, orders can only be canceled, not modified."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()
@@ -1474,7 +1471,7 @@ def test_order_can_only_cancel_after_payment_chosen(make_client: MakeClientCalla
 
 
 def test_order_locking_inventory_release_on_reopen(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     """Test that inventory is released when an order is reopened."""
     alice, bob = make_two_clients
@@ -1517,7 +1514,7 @@ def test_order_locking_inventory_release_on_reopen(
 
 def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     """Test comprehensive order state transitions with reopen functionality."""
-    alice: RelayClientProtocol = make_client("alice")
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()

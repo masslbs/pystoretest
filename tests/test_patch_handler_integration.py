@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Integration tests for PatchHandler with RefactoredRelayClient."""
+"""Integration tests for PatchHandler with RelayClient."""
 
 import pytest
 import os
 from unittest.mock import patch
-from massmarket_client.client import RefactoredRelayClient
+from massmarket_client.client import RelayClient
 from massmarket_client.patch_handler import PatchHandler, StateChangeObserver
 from massmarket.cbor.order import Order
 from massmarket.cbor.patch import Patch, ObjectType, OpString, PatchPath
@@ -42,8 +42,8 @@ class NotificationHandler(StateChangeObserver):
                     self.shipping_updates.append(object_id)
 
 
-class TestRefactoredRelayClientIntegration:
-    """Test RefactoredRelayClient with custom patch handler."""
+class TestRelayClientIntegration:
+    """Test RelayClient with custom patch handler."""
 
     @pytest.fixture
     def mock_env(self):
@@ -80,7 +80,7 @@ class TestRefactoredRelayClientIntegration:
     ):
         """Test creating client with custom patch handler."""
         # Create client with custom handler
-        client = RefactoredRelayClient(
+        client = RelayClient(
             name="test_merchant",
             wallet_private_key="0x" + "1" * 64,
             custom_patch_handler=custom_patch_handler_factory,
@@ -95,7 +95,7 @@ class TestRefactoredRelayClientIntegration:
     ):
         """Test that StateManager uses the custom patch handler."""
         # Create client with custom handler
-        client = RefactoredRelayClient(
+        client = RelayClient(
             name="test_merchant",
             wallet_private_key="0x" + "1" * 64,
             custom_patch_handler=custom_patch_handler_factory,
@@ -155,7 +155,7 @@ class TestRefactoredRelayClientIntegration:
         self, mock_env, custom_patch_handler_factory, notification_handler
     ):
         """Test multiple patches are handled correctly."""
-        client = RefactoredRelayClient(
+        client = RelayClient(
             name="test_merchant",
             wallet_private_key="0x" + "1" * 64,
             custom_patch_handler=custom_patch_handler_factory,
@@ -307,7 +307,7 @@ class TestCaduceusUsageExample:
             return handler
 
         # Create client with observer
-        client = RefactoredRelayClient(
+        client = RelayClient(
             name="caduceus",
             wallet_private_key="0x" + "2" * 64,
             custom_patch_handler=custom_patch_handler_factory,

@@ -10,9 +10,7 @@ import os
 import pytest
 from web3 import Account
 
-from massmarket_client.legacy_client import RelayClient
-from massmarket_client.client import RefactoredRelayClient
-from massmarket_client import RelayClientProtocol
+from massmarket_client.client import RelayClient
 from massmarket_client.utils import AccountFaucet
 
 
@@ -29,7 +27,8 @@ def print_running_threads():
 
 atexit.register(print_running_threads)
 
-use_refactored = os.getenv("USE_REFACTORED_CLIENT", "false").lower() == "true"
+use_refactored = os.getenv("USE_REFACTORED_CLIENT")
+assert use_refactored is None, "USE_REFACTORED_CLIENT is a deprecated flag"
 
 
 class MakeClientCallable(Protocol):
@@ -41,34 +40,28 @@ class MakeClientCallable(Protocol):
         private_key: bytes | None = None,
         auto_connect: bool = True,
         validate_patches: bool = True,
-    ) -> RelayClientProtocol: ...
+    ) -> RelayClient: ...
 
 
 @pytest.fixture
-def wc_conn(account_manager) -> RelayClientProtocol:
+def wc_conn(account_manager) -> RelayClient:
     ta = account_manager.get_test_account()
 
-    if use_refactored:
-        return RefactoredRelayClient(name="wc_conn", wallet_account=ta)
-    else:
-        return RelayClient(name="wc_conn", wallet_account=ta)
+    return RelayClient(name="wc_conn", wallet_account=ta)
 
 
 @pytest.fixture
-def wc_shop(wc_conn: RelayClientProtocol) -> RelayClientProtocol:
+def wc_shop(wc_conn: RelayClient) -> RelayClient:
     wc_conn.register_shop()
     wc_conn.enroll_key_card()
     return wc_conn
 
 
 @pytest.fixture
-def wc_auth(account_manager) -> RelayClientProtocol:
+def wc_auth(account_manager) -> RelayClient:
     ta = account_manager.get_test_account()
 
-    if use_refactored:
-        conn = RefactoredRelayClient(name="wc_auth", wallet_account=ta)
-    else:
-        conn = RelayClient(name="wc_auth", wallet_account=ta)
+    conn = RelayClient(name="wc_auth", wallet_account=ta)
 
     conn.register_shop()
     conn.enroll_key_card()
@@ -81,7 +74,7 @@ def wc_auth(account_manager) -> RelayClientProtocol:
 def make_client(
     account_manager,
 ) -> Generator[MakeClientCallable, Any, Any]:
-    created_clients: List[RelayClientProtocol] = []
+    created_clients: List[RelayClient] = []
 
     def _make_client(
         name: str,
@@ -90,13 +83,13 @@ def make_client(
         private_key: bytes | None = None,
         auto_connect: bool = True,
         validate_patches: bool = True,
-    ) -> RelayClientProtocol:
+    ) -> RelayClient:
         acc = None
         if not private_key:
             acc = account_manager.get_test_account()
 
         if use_refactored:
-            c = RefactoredRelayClient(
+            c = RelayClient(
                 name=name,
                 guest=guest,
                 wallet_account=acc,
@@ -137,10 +130,10 @@ def cleanup():
 @pytest.fixture
 def make_two_clients(
     make_client, cleanup
-) -> Generator[Tuple[RelayClientProtocol, RelayClientProtocol], Any, Any]:
+) -> Generator[Tuple[RelayClient, RelayClient], Any, Any]:
     # both alices share the same private wallet but have different keycards
-    a1: RelayClientProtocol = make_client("alice.1")
-    a2: RelayClientProtocol = make_client("alice.2")
+    a1: RelayClient = make_client("alice.1")
+    a2: RelayClient = make_client("alice.2")
     cleanup.append(a1)
     cleanup.append(a2)
     shop_id = a1.register_shop()
@@ -186,11 +179,9 @@ def make_two_clients(
 @pytest.fixture
 def make_two_guests(
     make_client: MakeClientCallable,
-) -> Generator[
-    Tuple[RelayClientProtocol, RelayClientProtocol, RelayClientProtocol], None, None
-]:
+) -> Generator[Tuple[RelayClient, RelayClient, RelayClient], None, None]:
     # create the owner/clerk
-    charlie: RelayClientProtocol = make_client("charlie")
+    charlie: RelayClient = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -198,7 +189,7 @@ def make_two_guests(
     assert charlie.errors == 0
 
     # create two guests
-    guest1: RelayClientProtocol = make_client(
+    guest1: RelayClient = make_client(
         "guest1", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     guest1.enroll_key_card()
@@ -207,7 +198,7 @@ def make_two_guests(
     guest1.subscribe_customer()
     assert guest1.errors == 0
 
-    guest2: RelayClientProtocol = make_client(
+    guest2: RelayClient = make_client(
         "guest2", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     guest2.enroll_key_card()

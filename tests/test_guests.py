@@ -24,12 +24,9 @@ import massmarket.cbor.order as mass_order
 import massmarket.cbor.manifest as mass_manifest
 import massmarket.cbor.patch as mass_patch
 
-from massmarket_client.legacy_client import (
-    RelayClient,
-)
+from massmarket_client import RelayClient
 from massmarket_client.utils import new_object_id, RelayException
 
-from massmarket_client import RelayClientProtocol
 from tests.conftest import MakeClientCallable
 from tests import objfactory
 
@@ -114,9 +111,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
     # Create the shop owner
     eth_private_key = os.getenv("ETH_PRIVATE_KEY")
     private_key_bytes = bytes.fromhex(eth_private_key) if eth_private_key else None
-    owner: RelayClientProtocol = make_client(
-        "shop_owner", private_key=private_key_bytes
-    )
+    owner: RelayClient = make_client("shop_owner", private_key=private_key_bytes)
 
     # Check if shop already exists
     shop_token_id = 4660  # = 0x1234
@@ -140,7 +135,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
         print(
             f"NFT {shop_token_id} doesn't exist, checking if shop data exists in relay..."
         )
-        test_client: RelayClientProtocol = make_client(
+        test_client: RelayClient = make_client(
             "test_checker", private_key=os.urandom(32), validate_patches=False
         )
         test_client.shop_token_id = shop_token_id
@@ -242,7 +237,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
     assert owner.errors == 0
 
     # Create a customer one and place some orders
-    cust1: RelayClientProtocol = make_client(
+    cust1: RelayClient = make_client(
         "customer1", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     cust1.enroll_key_card()
@@ -276,7 +271,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
     assert cust1.errors == 0
 
     # Create a second customer and have them place an order
-    cust2: RelayClientProtocol = make_client(
+    cust2: RelayClient = make_client(
         "customer2", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     cust2.enroll_key_card()
@@ -445,7 +440,7 @@ def test_shop_hydration_from_seed():
 
 def test_guest_subscribe_before_auth(make_client):
     # create the owner/clerk
-    charlie: RelayClientProtocol = make_client("charlie")
+    charlie: RelayClient = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -454,7 +449,7 @@ def test_guest_subscribe_before_auth(make_client):
     assert charlie.shop is not None
 
     # create a guest without a keycard
-    guest: RelayClientProtocol = make_client(
+    guest: RelayClient = make_client(
         "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     guest.connect()
@@ -485,7 +480,7 @@ def test_guest_subscribe_before_auth(make_client):
 
 def test_guest_subscribe_to_accounts(make_client):
     # create the owner/clerk
-    clerk: RelayClientProtocol = make_client("clerk")
+    clerk: RelayClient = make_client("clerk")
     shop_id = clerk.register_shop()
     clerk.enroll_key_card()
     clerk.login()
@@ -527,7 +522,7 @@ def test_guest_subscribe_to_accounts(make_client):
 
 def test_guest_subscribe_orders_needs_auth(make_client):
     # create the owner/clerk
-    charlie: RelayClientProtocol = make_client("charlie")
+    charlie: RelayClient = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -535,7 +530,7 @@ def test_guest_subscribe_orders_needs_auth(make_client):
     assert charlie.errors == 0
 
     # create a guest without a keycard
-    guest: RelayClientProtocol = make_client(
+    guest: RelayClient = make_client(
         "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     guest.connect()
@@ -560,9 +555,7 @@ def test_guest_subscribe_orders_needs_auth(make_client):
 
 
 def test_guest_user_create_order(
-    make_two_guests: Tuple[
-        RelayClientProtocol, RelayClientProtocol, RelayClientProtocol
-    ],
+    make_two_guests: Tuple[RelayClient, RelayClient, RelayClient],
 ):
     clerk, guest1, guest2 = make_two_guests
     assert guest1.shop is not None
@@ -589,9 +582,7 @@ def test_guest_user_create_order(
 
 
 def test_guest_commit_other_users_order(
-    make_two_guests: Tuple[
-        RelayClientProtocol, RelayClientProtocol, RelayClientProtocol
-    ],
+    make_two_guests: Tuple[RelayClient, RelayClient, RelayClient],
 ):
     clerk, guest1, guest2 = make_two_guests
 
@@ -757,7 +748,7 @@ def test_guest_cannot_create_or_update_shop_manifest(make_two_guests):
 
 def test_guest_subscribe_empty_filter_no_private_data(make_client):
     # create the owner/clerk
-    charlie: RelayClientProtocol = make_client("charlie")
+    charlie: RelayClient = make_client("charlie")
     shop_id = charlie.register_shop()
     charlie.enroll_key_card()
     charlie.login()
@@ -772,7 +763,7 @@ def test_guest_subscribe_empty_filter_no_private_data(make_client):
     charlie.close()
 
     # Create another customer and place an order
-    customer: RelayClientProtocol = make_client(
+    customer: RelayClient = make_client(
         "customer", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     customer.enroll_key_card()
@@ -791,7 +782,7 @@ def test_guest_subscribe_empty_filter_no_private_data(make_client):
     customer.close()
 
     # create a guest without a keycard
-    guest: RelayClientProtocol = make_client(
+    guest: RelayClient = make_client(
         "guest", shop=shop_id, guest=True, private_key=os.urandom(32)
     )
     guest.debug = True

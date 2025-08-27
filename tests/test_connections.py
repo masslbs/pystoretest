@@ -13,7 +13,7 @@ import siwe
 
 from massmarket import envelope_pb2, subscription_pb2, base_types_pb2
 
-from massmarket_client.legacy_client import RelayClient
+from massmarket_client import RelayClient
 from massmarket_client.utils import RelayException, EnrollException
 
 
@@ -37,13 +37,15 @@ def test_keycard_invalid(account_manager):
     # repeating enroll_key_card() internals
     keyCard = keys.PrivateKey(rc.own_key_card.key)
     kc_hex = keyCard.public_key.to_hex()
-    enroll_url = rc.relay_addr._replace(path="/v3/enroll_key_card").geturl()
+    enroll_url = rc.connection_manager.relay_addr._replace(
+        path="/v3/enroll_key_card"
+    ).geturl()
     now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
     def make():
         return siwe.SiweMessage(
             issued_at=now,
-            domain=rc.relay_addr.netloc,
+            domain=rc.connection_manager.relay_addr.netloc,
             address=rc.account.address,
             uri=enroll_url,
             version="1",

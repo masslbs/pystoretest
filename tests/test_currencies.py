@@ -6,13 +6,13 @@ from typing import Tuple
 import os
 import random
 
-from massmarket_client import RelayClientProtocol
+from massmarket_client import RelayClient
 from massmarket import error_pb2
 import massmarket.cbor.base_types as mbase
 
 
-def setup_shop_with_listing(make_client) -> Tuple[RelayClientProtocol, int]:
-    alice: RelayClientProtocol = make_client("alice")
+def setup_shop_with_listing(make_client) -> Tuple[RelayClient, int]:
+    alice: RelayClient = make_client("alice")
     alice.register_shop()
     alice.enroll_key_card()
     alice.login()

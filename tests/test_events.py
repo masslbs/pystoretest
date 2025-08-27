@@ -18,10 +18,9 @@ import massmarket.cbor.patch as mpatch
 import massmarket.cbor.base_types as mbase
 import massmarket.cbor.listing as mlisting
 import massmarket.cbor.order as morder
-from massmarket_client.legacy_client import RelayClient
 from massmarket_client.utils import RelayException
 from massmarket_client.utils import new_object_id, vid
-from massmarket_client import RelayClientProtocol
+from massmarket_client import RelayClient
 from tests.conftest import MakeClientCallable
 
 
@@ -33,7 +32,7 @@ def test_helper_vid():
     assert vid(1, ["3", "2"]) == "1:2:3:"
 
 
-def test_event_nonce_collision(wc_auth: RelayClientProtocol):
+def test_event_nonce_collision(wc_auth: RelayClient):
     wc_auth.create_shop_manifest()
     assert wc_auth.errors == 0
 
@@ -72,7 +71,7 @@ def test_event_nonce_collision(wc_auth: RelayClientProtocol):
     wc_auth.close()
 
 
-def test_clerk_update_shop_manifest(wc_auth: RelayClientProtocol):
+def test_clerk_update_shop_manifest(wc_auth: RelayClient):
     wc_auth.create_shop_manifest()
     wc_auth.debug = True
     assert wc_auth.errors == 0
@@ -104,7 +103,7 @@ def test_clerk_update_shop_manifest(wc_auth: RelayClientProtocol):
 
 
 def test_clerk_sync_shop_manifest(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     a1, a2 = make_two_clients
     assert a1.shop is not None
@@ -251,7 +250,7 @@ def test_accounts_mirror(make_client: MakeClientCallable):
 
 
 def test_subscription_management(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     a, b = make_two_clients
 
@@ -484,7 +483,7 @@ def test_clerk_same_ids_with_other_shop(make_client: MakeClientCallable):
 
 
 def test_clerk_create_and_edit_tag(
-    make_two_clients: Tuple[RelayClientProtocol, RelayClientProtocol],
+    make_two_clients: Tuple[RelayClient, RelayClient],
 ):
     a1, a2 = make_two_clients
 

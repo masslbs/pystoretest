@@ -35,7 +35,7 @@ from .utils import (
 )
 
 
-class RefactoredRelayClient:
+class RelayClient:
     """Refactored relay client with separated concerns and persistence."""
 
     def __init__(

@@ -14,7 +14,7 @@ import humanize
 # our imports
 from massmarket.cbor import patch as mass_patch
 
-from massmarket_client.legacy_client import RelayClient
+from massmarket_client import RelayClient
 from . import objfactory
 
 logging.basicConfig(

@@ -9,7 +9,7 @@ import tempfile
 import shutil
 
 
-from massmarket_client.client import RefactoredRelayClient
+from massmarket_client import RelayClient
 from massmarket_client.persistence import ShopPersistence
 
 
@@ -45,7 +45,7 @@ def make_refactored_client(account_manager, temp_persistence_dir):
         if not private_key:
             acc = account_manager.get_test_account()
 
-        client = RefactoredRelayClient(
+        client = RelayClient(
             name=name,
             guest=guest,
             wallet_account=acc,
