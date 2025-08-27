@@ -1520,10 +1520,12 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     alice.login()
     alice.create_shop_manifest()
     assert alice.errors == 0
+    assert alice.shop is not None
 
     # Create order - starts in OPEN
     oid, iid1, _ = prepare_order(alice)
     order = alice.shop.orders.get(oid)
+    assert order is not None
     assert order.payment_state == morder.OrderPaymentState.OPEN
 
     # OPEN -> LOCKED (commit)
@@ -1531,6 +1533,7 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     assert alice.errors == 0
     alice.handle_all()  # Sync state
     order = alice.shop.orders.get(oid)
+    assert order is not None
     assert order.payment_state == morder.OrderPaymentState.LOCKED
 
     # LOCKED -> OPEN (reopen)
@@ -1538,6 +1541,7 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     assert alice.errors == 0
     alice.handle_all()
     order = alice.shop.orders.get(oid)
+    assert order is not None
     assert order.payment_state == morder.OrderPaymentState.OPEN
 
     # OPEN -> LOCKED -> address -> still LOCKED
@@ -1546,6 +1550,7 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     assert alice.errors == 0
     alice.handle_all()  # Sync state
     order = alice.shop.orders.get(oid)
+    assert order is not None
     assert order.payment_state == morder.OrderPaymentState.LOCKED
 
     # LOCKED -> OPEN (reopen after address)
@@ -1553,6 +1558,7 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     assert alice.errors == 0
     alice.handle_all()
     order = alice.shop.orders.get(oid)
+    assert order is not None
     assert order.payment_state == morder.OrderPaymentState.OPEN
 
     # OPEN -> LOCKED -> PAYMENT_CHOSEN -> UNPAID (no reopen possible)
@@ -1568,5 +1574,77 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
     # Cannot reopen after PAYMENT_CHOSEN
     alice.expect_error = True
     alice.reopen_order(oid)
-    assert alice.errors == 1
+    assert alice.errors == 1 and alice.last_error is not None
     assert alice.last_error.code == error_pb2.ERROR_CODES_INVALID
+
+
+def test_inventory_updated_on_lock(make_client: MakeClientCallable):
+    """Test that inventory is updated as soon as orders are locked, not when paid."""
+    alice: RelayClient = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    assert alice.errors == 0
+
+    # Create listing with limited inventory
+    listing_id = alice.create_listing("Test Item", 1000)
+    alice.change_inventory(listing_id, 2)  # Only 2 items available
+    assert alice.errors == 0
+
+    # Create first order and add item
+    order_id1 = alice.create_order()
+    alice.add_to_order(order_id1, listing_id, 1)
+    assert alice.errors == 0
+
+    # Create second order and add item
+    order_id2 = alice.create_order()
+    alice.add_to_order(order_id2, listing_id, 1)
+    assert alice.errors == 0
+
+    # Commit first order - this should lock and reduce inventory
+    alice.commit_items(order_id1)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    # Verify inventory is reduced after commit/lock (before payment)
+    current_inventory = alice.check_inventory(listing_id)
+    assert current_inventory == 1, (
+        "Inventory should be reduced to 1 after first order is locked"
+    )
+
+    # Commit second order - should succeed as 1 item remains
+    alice.commit_items(order_id2)
+    assert alice.errors == 0
+    alice.handle_all()
+
+    # Verify inventory is now 0 after second order is locked
+    current_inventory = alice.check_inventory(listing_id)
+    assert current_inventory == 0, "Inventory should be 0 after second order is locked"
+
+    # Try to create and commit a third order - should fail due to out of stock
+    order_id3 = alice.create_order()
+    alice.add_to_order(order_id3, listing_id, 1)
+    assert alice.errors == 0
+
+    alice.expect_error = True
+    alice.commit_items(order_id3)
+    assert alice.errors == 1
+    assert alice.last_error is not None
+    assert alice.last_error.code == error_pb2.ERROR_CODES_OUT_OF_STOCK
+
+    # Clean up error state
+    alice.expect_error = False
+    alice.errors = 0
+    alice.last_error = None
+
+    # Verify inventory remains 0 even if we abandon the second order
+    alice.abandon_order(order_id2)
+    assert alice.errors == 0
+    alice.handle_all()
+
+    # Inventory should be back to 1 after abandoning order2
+    current_inventory = alice.check_inventory(listing_id)
+    assert current_inventory == 1, (
+        "Inventory should return to 1 after abandoning order2"
+    )
