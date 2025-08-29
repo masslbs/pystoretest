@@ -1546,6 +1546,8 @@ def test_order_state_transitions_comprehensive(make_client: MakeClientCallable):
 
     # OPEN -> LOCKED -> address -> still LOCKED
     alice.commit_items(oid)
+    alice.handle_all()
+    assert alice.errors == 0
     alice.update_address_for_order(oid, invoice=default_addr)
     assert alice.errors == 0
     alice.handle_all()  # Sync state
@@ -1647,4 +1649,55 @@ def test_inventory_updated_on_lock(make_client: MakeClientCallable):
     current_inventory = alice.check_inventory(listing_id)
     assert current_inventory == 1, (
         "Inventory should return to 1 after abandoning order2"
+    )
+
+
+def test_order_auto_cancel_on_timeout(make_client: MakeClientCallable):
+    """Test that orders are automatically canceled and inventory freed after timeout."""
+    alice: RelayClient = make_client("alice")
+    alice.register_shop()
+    alice.enroll_key_card()
+    alice.login()
+    alice.create_shop_manifest()
+    timeout = 60  # seconds
+    alice.update_shop_manifest(order_timeout=timeout)
+    assert alice.errors == 0
+
+    # Create listing with limited inventory
+    listing_id = alice.create_listing("Test Item", 1000)
+    alice.change_inventory(listing_id, 1)  # Only 1 item available
+    assert alice.errors == 0
+
+    # Create order and add item
+    order_id = alice.create_order()
+    alice.add_to_order(order_id, listing_id, 1)
+    assert alice.errors == 0
+
+    # Commit order to lock it
+    alice.commit_items(order_id)
+    assert alice.errors == 0
+    alice.handle_all()  # Sync state
+
+    # Verify order is locked and inventory is reduced
+    order = alice.shop.orders.get(order_id)
+    assert order is not None
+    assert order.payment_state == morder.OrderPaymentState.LOCKED
+
+    current_inventory = alice.check_inventory(listing_id)
+    assert current_inventory == 0, "Inventory should be 0 after order is locked"
+
+    start_time = time.time()
+    while time.time() - start_time < timeout + 10:
+        alice.handle_all()
+    print("waited for timeout")
+
+    # Verify order is canceled
+    order = alice.shop.orders.get(order_id)
+    assert order is not None
+    assert order.payment_state == morder.OrderPaymentState.CANCELED
+
+    # Verify inventory is freed up
+    current_inventory = alice.check_inventory(listing_id)
+    assert current_inventory == 1, (
+        "Inventory should be restored to 1 after order cancellation"
     )

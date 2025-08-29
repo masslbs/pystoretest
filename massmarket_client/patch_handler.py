@@ -210,6 +210,9 @@ class PatchHandler:
                         f"currency already exists: {chain_id}/{addr.hex()}"
                     )
                 self.shop.manifest.accepted_currencies[chain_id].add(addr)
+            elif patch.path.fields[0] == "OrderPaymentTimeout":
+                assert isinstance(patch.value, int)
+                self.shop.manifest.order_payment_timeout = patch.value
             else:
                 return invalidError(
                     f"unhandled manifest patch fields: {patch.path.fields}"
@@ -296,6 +299,7 @@ class PatchHandler:
                     payees={},
                     accepted_currencies=[],
                     pricing_currency=None,
+                    order_payment_timeout=3600,
                 ),
                 accounts=self.shop.accounts,
             )

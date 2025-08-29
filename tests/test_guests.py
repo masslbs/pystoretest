@@ -173,6 +173,7 @@ def test_make_hydration_data(make_client: MakeClientCallable):
                 )
                 # Shop data exists in relay, just recreate the NFT
                 shop_id = owner.register_shop(token_id=shop_token_id)
+                owner.login(subscribe=False)
                 set_token_uri(owner)
                 owner.add_relay_to_shop(owner.relay_token_id)
                 owner.close()

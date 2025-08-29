@@ -82,6 +82,7 @@ class ShopOperations:
         remove_payee: Optional[mass_base.Payee] = None,
         add_region: Optional[Tuple[str, mass_base.ShippingRegion]] = None,
         remove_region: Optional[str] = None,
+        order_timeout: Optional[int] = None,
         wait: bool = True,
     ):
         """Update shop manifest."""
@@ -140,6 +141,11 @@ class ShopOperations:
             assert isinstance(remove_region, str)
             fields = ["ShippingRegions", remove_region]
             obj = None
+        elif order_timeout is not None:
+            op = mass_patch.OpString.REPLACE
+            assert isinstance(order_timeout, int)
+            fields = ["OrderPaymentTimeout"]
+            obj = order_timeout
         else:
             raise Exception("no fields to update")
         self.patch_manager.write_patch(

@@ -677,6 +677,7 @@ class RelayClient:
         remove_payee: Optional[mass_base.Payee] = None,
         add_region: Optional[Tuple[str, mass_base.ShippingRegion]] = None,
         remove_region: Optional[str] = None,
+        order_timeout: Optional[int] = None,
         wait: bool = True,
     ):
         """Update shop manifest."""
@@ -690,6 +691,7 @@ class RelayClient:
             remove_payee,
             add_region,
             remove_region,
+            order_timeout,
             wait,
         )
 
