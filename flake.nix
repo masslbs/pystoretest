@@ -14,7 +14,7 @@
     nixpkgs.follows = "network-schema/nixpkgs"; # align python versions
     # mass things
     contracts.url = "github:masslbs/contracts";
-    network-schema.url = "github:masslbs/network-schema/order-locking-states";
+    network-schema.url = "github:masslbs/network-schema/v5-dev";
   };
 
   outputs = inputs @ {
